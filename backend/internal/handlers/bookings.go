@@ -1,0 +1,283 @@
+package handlers
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+
+	"ralto/internal/models"
+	"ralto/internal/notify"
+)
+
+// bookingContext is what every notification trigger below needs to render
+// its template: role/job/dates/venue plus the identifiers to act on.
+type bookingContext struct {
+	PersonID  string
+	RoleName  string
+	JobName   string
+	JobID     string
+	DatesText string
+	Venue     string
+}
+
+func (a *API) loadBookingContext(ctx context.Context, bookingID string) (bookingContext, error) {
+	var c bookingContext
+	err := a.DB.QueryRow(ctx,
+		`SELECT b.person_id, ro.name, j.name, j.id,
+		        to_char(b.start_date, 'DD Mon') || '–' || to_char(b.end_date, 'DD Mon'),
+		        COALESCE(v.name, 'Venue TBC')
+		 FROM bookings b
+		 JOIN job_requirements jr ON jr.id = b.job_requirement_id
+		 JOIN jobs j ON j.id = jr.job_id
+		 JOIN roles ro ON ro.id = jr.role_id
+		 LEFT JOIN venues v ON v.id = j.venue_id
+		 WHERE b.id = $1`,
+		bookingID,
+	).Scan(&c.PersonID, &c.RoleName, &c.JobName, &c.JobID, &c.DatesText, &c.Venue)
+	return c, err
+}
+
+func crewCTAURL(path string) string {
+	origin := os.Getenv("FRONTEND_ORIGIN")
+	if origin == "" {
+		origin = "http://localhost:5173"
+	}
+	return origin + "/crew" + path
+}
+
+func (a *API) ListBookingsForRequirement(w http.ResponseWriter, r *http.Request) {
+	reqID := chi.URLParam(r, "reqId")
+	rows, err := a.DB.Query(r.Context(),
+		`SELECT id, job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override,
+		        offered_at, responded_at, confirmed_at, notes
+		 FROM bookings WHERE job_requirement_id = $1 ORDER BY offered_at`, reqID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list bookings")
+		return
+	}
+	defer rows.Close()
+
+	bookings := []models.Booking{}
+	for rows.Next() {
+		var b models.Booking
+		if err := rows.Scan(&b.ID, &b.JobRequirementID, &b.PersonID, &b.Status, &b.StartDate, &b.EndDate, &b.CallTime,
+			&b.RateOverride, &b.OfferedAt, &b.RespondedAt, &b.ConfirmedAt, &b.Notes); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list bookings")
+			return
+		}
+		bookings = append(bookings, b)
+	}
+	writeJSON(w, http.StatusOK, bookings)
+}
+
+type createBookingRequest struct {
+	PersonID     string   `json:"person_id"`
+	StartDate    string   `json:"start_date"`
+	EndDate      string   `json:"end_date"`
+	CallTime     *string  `json:"call_time"`
+	RateOverride *float64 `json:"rate_override"`
+	Notes        *string  `json:"notes"`
+}
+
+// CreateBooking is the "Offer" action from the Planner screen — creates a
+// Booking in `offered` status and sends the booking_offered notification.
+// Rejects with 409 if the parent Job is cancelled/complete, mirroring
+// Equiptra's live project-status guard on booking creation.
+func (a *API) CreateBooking(w http.ResponseWriter, r *http.Request) {
+	reqID := chi.URLParam(r, "reqId")
+	var req createBookingRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	var jobStatus models.JobStatus
+	if err := a.DB.QueryRow(r.Context(),
+		`SELECT j.status FROM job_requirements jr JOIN jobs j ON j.id = jr.job_id WHERE jr.id = $1`, reqID,
+	).Scan(&jobStatus); errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "job requirement not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create booking")
+		return
+	}
+	if jobStatus == models.JobStatusCancelled || jobStatus == models.JobStatusComplete {
+		writeError(w, http.StatusConflict, "job is cancelled or complete — cannot create new bookings")
+		return
+	}
+
+	var b models.Booking
+	err := a.DB.QueryRow(r.Context(),
+		`INSERT INTO bookings (job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override, notes, offered_at)
+		 VALUES ($1, $2, 'offered', $3, $4, $5, $6, $7, now())
+		 RETURNING id, job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override, offered_at, responded_at, confirmed_at, notes`,
+		reqID, req.PersonID, req.StartDate, req.EndDate, req.CallTime, req.RateOverride, req.Notes,
+	).Scan(&b.ID, &b.JobRequirementID, &b.PersonID, &b.Status, &b.StartDate, &b.EndDate, &b.CallTime,
+		&b.RateOverride, &b.OfferedAt, &b.RespondedAt, &b.ConfirmedAt, &b.Notes)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to create booking")
+		return
+	}
+
+	ctx, ctxErr := a.loadBookingContext(r.Context(), b.ID)
+	if ctxErr == nil {
+		subject, body := notify.RenderBookingOffered(ctx.RoleName, ctx.JobName, ctx.DatesText, crewCTAURL("/offers/"+b.ID))
+		_ = a.notifyPerson(r.Context(), ctx.PersonID, models.NotificationTypeBookingOffered,
+			map[string]string{"role": ctx.RoleName, "job_name": ctx.JobName, "dates": ctx.DatesText}, subject, body)
+	}
+
+	writeJSON(w, http.StatusCreated, b)
+}
+
+type updateBookingRequest struct {
+	StartDate    string   `json:"start_date"`
+	EndDate      string   `json:"end_date"`
+	CallTime     *string  `json:"call_time"`
+	RateOverride *float64 `json:"rate_override"`
+	Notes        *string  `json:"notes"`
+}
+
+// UpdateBooking covers call-time/date/venue-adjacent edits to an existing
+// booking. If the call time actually changed on a live (offered/confirmed)
+// booking, this fires booking_updated — the one trigger that covers call
+// time, venue, or date changes uniformly (per the templates doc's own
+// reasoning: one trigger, not three near-duplicates).
+func (a *API) UpdateBooking(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req updateBookingRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	var previousCallTime *string
+	var status models.BookingStatus
+	if err := a.DB.QueryRow(r.Context(), `SELECT call_time, status FROM bookings WHERE id = $1`, id).Scan(&previousCallTime, &status); errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "booking not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update booking")
+		return
+	}
+
+	var b models.Booking
+	err := a.DB.QueryRow(r.Context(),
+		`UPDATE bookings SET start_date = $1, end_date = $2, call_time = $3, rate_override = $4, notes = $5
+		 WHERE id = $6
+		 RETURNING id, job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override, offered_at, responded_at, confirmed_at, notes`,
+		req.StartDate, req.EndDate, req.CallTime, req.RateOverride, req.Notes, id,
+	).Scan(&b.ID, &b.JobRequirementID, &b.PersonID, &b.Status, &b.StartDate, &b.EndDate, &b.CallTime,
+		&b.RateOverride, &b.OfferedAt, &b.RespondedAt, &b.ConfirmedAt, &b.Notes)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to update booking")
+		return
+	}
+
+	callTimeChanged := (previousCallTime == nil) != (req.CallTime == nil) ||
+		(previousCallTime != nil && req.CallTime != nil && *previousCallTime != *req.CallTime)
+	live := status == models.BookingStatusOffered || status == models.BookingStatusConfirmed
+	if callTimeChanged && live && previousCallTime != nil && req.CallTime != nil {
+		ctx, ctxErr := a.loadBookingContext(r.Context(), b.ID)
+		if ctxErr == nil {
+			change := fmt.Sprintf("Call time moved from %s to %s", *previousCallTime, *req.CallTime)
+			subject, body := notify.RenderBookingUpdated(ctx.JobName, change, crewCTAURL("/bookings/"+b.ID))
+			_ = a.notifyPerson(r.Context(), ctx.PersonID, models.NotificationTypeBookingUpdated,
+				map[string]string{"role": ctx.RoleName, "job_name": ctx.JobName, "change": change, "booking_id": b.ID}, subject, body)
+
+			// Raised so the Today screen's "Call-time change unacknowledged"
+			// tracker (same event, staff-facing side — see the templates
+			// doc's own note) has something to count. Resolved when the
+			// crew member hits Acknowledge — see CrewAcknowledgeBooking.
+			if _, err := a.DB.Exec(r.Context(),
+				`INSERT INTO operational_alerts (job_id, type, related_entity_id, status) VALUES ($1, 'unacknowledged_update', $2, 'open')`,
+				ctx.JobID, b.ID,
+			); err != nil {
+				log.Printf("update booking: raising unacknowledged_update alert: %v", err)
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, b)
+}
+
+// ConfirmBooking is the scheduler directly confirming a booking (as opposed
+// to a crew member accepting an offer — see CrewRespondToOffer).
+func (a *API) ConfirmBooking(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var b models.Booking
+	err := a.DB.QueryRow(r.Context(),
+		`UPDATE bookings SET status = 'confirmed', confirmed_at = now() WHERE id = $1
+		 RETURNING id, job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override, offered_at, responded_at, confirmed_at, notes`,
+		id,
+	).Scan(&b.ID, &b.JobRequirementID, &b.PersonID, &b.Status, &b.StartDate, &b.EndDate, &b.CallTime,
+		&b.RateOverride, &b.OfferedAt, &b.RespondedAt, &b.ConfirmedAt, &b.Notes)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "booking not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to confirm booking")
+		return
+	}
+
+	ctx, ctxErr := a.loadBookingContext(r.Context(), b.ID)
+	if ctxErr == nil {
+		subject, body := notify.RenderBookingConfirmed(ctx.RoleName, ctx.JobName, ctx.DatesText, crewCTAURL("/bookings/"+b.ID))
+		_ = a.notifyPerson(r.Context(), ctx.PersonID, models.NotificationTypeBookingConfirmed,
+			map[string]string{"role": ctx.RoleName, "job_name": ctx.JobName, "dates": ctx.DatesText}, subject, body)
+	}
+
+	writeJSON(w, http.StatusOK, b)
+}
+
+func (a *API) CancelBooking(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var b models.Booking
+	err := a.DB.QueryRow(r.Context(),
+		`UPDATE bookings SET status = 'cancelled' WHERE id = $1
+		 RETURNING id, job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override, offered_at, responded_at, confirmed_at, notes`,
+		id,
+	).Scan(&b.ID, &b.JobRequirementID, &b.PersonID, &b.Status, &b.StartDate, &b.EndDate, &b.CallTime,
+		&b.RateOverride, &b.OfferedAt, &b.RespondedAt, &b.ConfirmedAt, &b.Notes)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "booking not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to cancel booking")
+		return
+	}
+
+	ctx, ctxErr := a.loadBookingContext(r.Context(), b.ID)
+	if ctxErr == nil {
+		subject, body := notify.RenderBookingCancelled(ctx.RoleName, ctx.JobName, ctx.DatesText)
+		_ = a.notifyPerson(r.Context(), ctx.PersonID, models.NotificationTypeBookingCancelled,
+			map[string]string{"role": ctx.RoleName, "job_name": ctx.JobName, "dates": ctx.DatesText}, subject, body)
+	}
+
+	writeJSON(w, http.StatusOK, b)
+}
+
+// DeleteBooking only allows removing a booking that's still a bare offer —
+// once anything has happened (a response, a confirmation), Cancel is the
+// correct action so the history stays real. Mirrors Equiptra's
+// history-vs-existence delete guards.
+func (a *API) DeleteBooking(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	tag, err := a.DB.Exec(r.Context(), `DELETE FROM bookings WHERE id = $1 AND status = 'offered'`, id)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to delete booking")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusConflict, "booking not found, or no longer a pending offer — cancel it instead")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}

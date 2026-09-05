@@ -1,0 +1,434 @@
+package models
+
+import "time"
+
+// --- Staff (scheduler/admin persona) ---
+
+type UserRole string
+
+const (
+	UserRoleAdmin     UserRole = "admin"
+	UserRoleScheduler UserRole = "scheduler"
+)
+
+type User struct {
+	ID                 string    `json:"id"`
+	Name               string    `json:"name"`
+	Email              string    `json:"email"`
+	Role               UserRole  `json:"role"`
+	Active             bool      `json:"active"`
+	MustChangePassword bool      `json:"must_change_password"`
+	PasswordHash       string    `json:"-"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+// --- Client ---
+
+type Client struct {
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	ContactName   *string   `json:"contact_name,omitempty"`
+	ContactEmail  *string   `json:"contact_email,omitempty"`
+	ContactPhone  *string   `json:"contact_phone,omitempty"`
+	Notes         *string   `json:"notes,omitempty"`
+	BrandColorHex *string   `json:"brand_color_hex,omitempty"`
+	Website       *string   `json:"website,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// --- Venue ---
+
+type Venue struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Address   *string   `json:"address,omitempty"`
+	City      *string   `json:"city,omitempty"`
+	Country   *string   `json:"country,omitempty"`
+	Timezone  string    `json:"timezone"`
+	Notes     *string   `json:"notes,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// --- Project (Ralto-local grouping of Jobs — not the suite-core Project) ---
+
+type Project struct {
+	ID               string    `json:"id"`
+	Name             string    `json:"name"`
+	ClientID         *string   `json:"client_id,omitempty"`
+	DateStart        *string   `json:"date_start,omitempty"` // date, YYYY-MM-DD
+	DateEnd          *string   `json:"date_end,omitempty"`
+	SharedProjectID  *string   `json:"shared_project_id,omitempty"` // inert until suite-core exists
+	ColorHex         *string   `json:"color_hex,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+// --- Job ---
+
+type JobStatus string
+
+const (
+	JobStatusDraft     JobStatus = "draft"
+	JobStatusDefining  JobStatus = "defining"
+	JobStatusCrewing   JobStatus = "crewing"
+	JobStatusConfirmed JobStatus = "confirmed"
+	JobStatusBriefed   JobStatus = "briefed"
+	JobStatusLive      JobStatus = "live"
+	JobStatusComplete  JobStatus = "complete"
+	JobStatusCancelled JobStatus = "cancelled"
+)
+
+type Job struct {
+	ID                string    `json:"id"`
+	Name              string    `json:"name"`
+	ClientID          string    `json:"client_id"`
+	ProjectReference  *string   `json:"project_reference,omitempty"`
+	VenueID           *string   `json:"venue_id,omitempty"`
+	ProjectID         *string   `json:"project_id,omitempty"`
+	StartDate         string    `json:"start_date"`
+	EndDate           string    `json:"end_date"`
+	Status            JobStatus `json:"status"`
+	ColorHex          *string   `json:"color_hex,omitempty"`
+	Notes             *string   `json:"notes,omitempty"`
+	CreatedBy         *string   `json:"created_by,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+type JobContact struct {
+	ID        string  `json:"id"`
+	JobID     string  `json:"job_id"`
+	Name      string  `json:"name"`
+	RoleTitle *string `json:"role_title,omitempty"`
+	Email     *string `json:"email,omitempty"`
+	Phone     *string `json:"phone,omitempty"`
+}
+
+// --- Role (master list) ---
+
+type Role struct {
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	Category *string `json:"category,omitempty"`
+}
+
+// --- JobRequirement ---
+
+type JobRequirement struct {
+	ID                string  `json:"id"`
+	JobID             string  `json:"job_id"`
+	RoleID            string  `json:"role_id"`
+	QuantityRequired  int     `json:"quantity_required"`
+	StartDate         string  `json:"start_date"`
+	EndDate           string  `json:"end_date"`
+	CallTime          *string `json:"call_time,omitempty"`
+	Notes             *string `json:"notes,omitempty"`
+}
+
+// --- Person (crew persona) ---
+
+type EmploymentType string
+
+const (
+	EmploymentTypeStaff      EmploymentType = "staff"
+	EmploymentTypeFreelancer EmploymentType = "freelancer"
+)
+
+type PersonStatus string
+
+const (
+	PersonStatusActive   PersonStatus = "active"
+	PersonStatusInactive PersonStatus = "inactive"
+)
+
+type PreferredStatus string
+
+const (
+	PreferredStatusPreferred  PreferredStatus = "preferred"
+	PreferredStatusApproved   PreferredStatus = "approved"
+	PreferredStatusStandard   PreferredStatus = "standard"
+	PreferredStatusRestricted PreferredStatus = "restricted"
+)
+
+type Person struct {
+	ID                   string          `json:"id"`
+	FirstName            string          `json:"first_name"`
+	LastName             string          `json:"last_name"`
+	Email                string          `json:"email"`
+	Phone                *string         `json:"phone,omitempty"`
+	BaseLocation         *string         `json:"base_location,omitempty"`
+	EmploymentType       EmploymentType  `json:"employment_type"`
+	Status               PersonStatus    `json:"status"`
+	PreferredStatus      PreferredStatus `json:"preferred_status"`
+	StandardRate         *float64        `json:"standard_rate,omitempty"`
+	RateCurrency         *string         `json:"rate_currency,omitempty"`
+	OvertimeRuleID       *string         `json:"overtime_rule_id,omitempty"`
+	Notes                *string         `json:"notes,omitempty"`
+	CalendarFeedToken    *string         `json:"-"` // never serialized; exposed only via its own endpoint
+	PhoneNumber          *string         `json:"phone_number,omitempty"`
+	NotificationChannels *string         `json:"notification_channels,omitempty"` // JSON, e.g. {"email":true,"whatsapp":false}
+	Active               bool            `json:"active"`
+	MustChangePassword   bool            `json:"must_change_password"`
+	PasswordHash         *string         `json:"-"`
+	CreatedAt            time.Time       `json:"created_at"`
+	UpdatedAt            time.Time       `json:"updated_at"`
+}
+
+type PersonRole struct {
+	ID        string `json:"id"`
+	PersonID  string `json:"person_id"`
+	RoleID    string `json:"role_id"`
+	IsPrimary bool   `json:"is_primary"`
+}
+
+// --- Skill / Certification ---
+
+type SkillType string
+
+const (
+	SkillTypeSkill         SkillType = "skill"
+	SkillTypeCertification SkillType = "certification"
+	SkillTypeVisa          SkillType = "visa"
+	SkillTypeCredential    SkillType = "credential"
+)
+
+type Skill struct {
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	Type           SkillType `json:"type"`
+	ExpiryTracked  bool      `json:"expiry_tracked"`
+}
+
+type PersonSkillStatus string
+
+const (
+	PersonSkillStatusValid    PersonSkillStatus = "valid"
+	PersonSkillStatusExpiring PersonSkillStatus = "expiring"
+	PersonSkillStatusExpired  PersonSkillStatus = "expired"
+)
+
+type PersonSkill struct {
+	ID          string             `json:"id"`
+	PersonID    string             `json:"person_id"`
+	SkillID     string             `json:"skill_id"`
+	IssuedDate  *string            `json:"issued_date,omitempty"`
+	ExpiryDate  *string            `json:"expiry_date,omitempty"`
+	DocumentID  *string            `json:"document_id,omitempty"`
+	Status      PersonSkillStatus  `json:"status"`
+}
+
+type PersonDocumentType string
+
+const (
+	PersonDocumentTypeCertification       PersonDocumentType = "certification"
+	PersonDocumentTypeVisa                PersonDocumentType = "visa"
+	PersonDocumentTypeProductionCredential PersonDocumentType = "production_credential"
+)
+
+type PersonDocument struct {
+	ID         string             `json:"id"`
+	PersonID   string             `json:"person_id"`
+	Type       PersonDocumentType `json:"type"`
+	FileRef    string             `json:"file_ref"`
+	ExpiryDate *string            `json:"expiry_date,omitempty"`
+	UploadedAt time.Time          `json:"uploaded_at"`
+}
+
+type OvertimeRule struct {
+	ID             string  `json:"id"`
+	Name           string  `json:"name"`
+	ThresholdHours float64 `json:"threshold_hours"`
+	Multiplier     float64 `json:"multiplier"`
+}
+
+// --- Booking ---
+
+type BookingStatus string
+
+const (
+	BookingStatusOffered     BookingStatus = "offered"
+	BookingStatusConfirmed   BookingStatus = "confirmed"
+	BookingStatusDeclined    BookingStatus = "declined"
+	BookingStatusCancelled   BookingStatus = "cancelled"
+	BookingStatusUnavailable BookingStatus = "unavailable"
+	BookingStatusConflict    BookingStatus = "conflict"
+	BookingStatusComplete    BookingStatus = "complete"
+)
+
+type Booking struct {
+	ID                string        `json:"id"`
+	JobRequirementID  string        `json:"job_requirement_id"`
+	PersonID          string        `json:"person_id"`
+	Status            BookingStatus `json:"status"`
+	StartDate         string        `json:"start_date"`
+	EndDate           string        `json:"end_date"`
+	CallTime          *string       `json:"call_time,omitempty"`
+	RateOverride      *float64      `json:"rate_override,omitempty"`
+	OfferedAt         time.Time     `json:"offered_at"`
+	RespondedAt       *time.Time    `json:"responded_at,omitempty"`
+	ConfirmedAt       *time.Time    `json:"confirmed_at,omitempty"`
+	Notes             *string       `json:"notes,omitempty"`
+}
+
+type BookingShift struct {
+	ID        string  `json:"id"`
+	BookingID string  `json:"booking_id"`
+	Date      string  `json:"date"`
+	CallTime  string  `json:"call_time"`
+	EndTime   string  `json:"end_time"`
+	Notes     *string `json:"notes,omitempty"`
+}
+
+// --- Timesheet ---
+
+type TimesheetStatus string
+
+const (
+	TimesheetStatusSubmitted TimesheetStatus = "submitted"
+	TimesheetStatusApproved  TimesheetStatus = "approved"
+	TimesheetStatusRejected  TimesheetStatus = "rejected"
+)
+
+type Timesheet struct {
+	ID              string          `json:"id"`
+	BookingID       string          `json:"booking_id"`
+	ScheduledStart  time.Time       `json:"scheduled_start"`
+	ScheduledEnd    time.Time       `json:"scheduled_end"`
+	ActualStart     *time.Time      `json:"actual_start,omitempty"`
+	ActualEnd       *time.Time      `json:"actual_end,omitempty"`
+	BreakMinutes    int             `json:"break_minutes"`
+	Status          TimesheetStatus `json:"status"`
+	SubmittedAt     *time.Time      `json:"submitted_at,omitempty"`
+	ApprovedBy      *string         `json:"approved_by,omitempty"`
+	ApprovedAt      *time.Time      `json:"approved_at,omitempty"`
+	CalculatedCost  *float64        `json:"calculated_cost,omitempty"`
+}
+
+// --- Availability ---
+
+type AvailabilityStatus string
+
+const (
+	AvailabilityStatusAvailable   AvailabilityStatus = "available"
+	AvailabilityStatusUnavailable AvailabilityStatus = "unavailable"
+	AvailabilityStatusTentative   AvailabilityStatus = "tentative"
+	AvailabilityStatusBooked      AvailabilityStatus = "booked"
+)
+
+type Availability struct {
+	ID        string             `json:"id"`
+	PersonID  string             `json:"person_id"`
+	StartDate string             `json:"start_date"`
+	EndDate   string             `json:"end_date"`
+	Status    AvailabilityStatus `json:"status"`
+	Notes     *string            `json:"notes,omitempty"`
+}
+
+type AvailabilityRequestStatus string
+
+const (
+	AvailabilityRequestStatusPending   AvailabilityRequestStatus = "pending"
+	AvailabilityRequestStatusResponded AvailabilityRequestStatus = "responded"
+)
+
+type AvailabilityResponse string
+
+const (
+	AvailabilityResponseYes       AvailabilityResponse = "yes"
+	AvailabilityResponsePartially AvailabilityResponse = "partially"
+	AvailabilityResponseNo        AvailabilityResponse = "no"
+)
+
+type AvailabilityRequest struct {
+	ID                 string                     `json:"id"`
+	PersonID           string                     `json:"person_id"`
+	JobID              *string                    `json:"job_id,omitempty"`
+	StartDate          string                     `json:"start_date"`
+	EndDate            string                     `json:"end_date"`
+	Message            *string                    `json:"message,omitempty"`
+	Status             AvailabilityRequestStatus  `json:"status"`
+	Response           *AvailabilityResponse      `json:"response,omitempty"`
+	RespondedAt        *time.Time                 `json:"responded_at,omitempty"`
+	SuggestedBookingID *string                    `json:"suggested_booking_id,omitempty"`
+	CreatedAt          time.Time                  `json:"created_at"`
+}
+
+// --- Notifications (outbound, crew-facing; channel-agnostic per the addendum) ---
+
+type NotificationType string
+
+const (
+	NotificationTypeBookingOffered        NotificationType = "booking_offered"
+	NotificationTypeBookingConfirmed      NotificationType = "booking_confirmed"
+	NotificationTypeBookingUpdated        NotificationType = "booking_updated"
+	NotificationTypeBookingCancelled      NotificationType = "booking_cancelled"
+	NotificationTypeShiftReminder         NotificationType = "shift_reminder"
+	NotificationTypeAvailabilityRequest   NotificationType = "availability_request"
+)
+
+type Notification struct {
+	ID        string           `json:"id"`
+	PersonID  string           `json:"person_id"`
+	Type      NotificationType `json:"type"`
+	Payload   string           `json:"payload"` // JSON blob: job name, times, venue, etc.
+	CreatedAt time.Time        `json:"created_at"`
+}
+
+type NotificationChannel string
+
+const (
+	NotificationChannelInApp   NotificationChannel = "in_app"
+	NotificationChannelEmail   NotificationChannel = "email"
+	NotificationChannelWhatsApp NotificationChannel = "whatsapp"
+)
+
+type NotificationDeliveryStatus string
+
+const (
+	NotificationDeliveryStatusPending   NotificationDeliveryStatus = "pending"
+	NotificationDeliveryStatusSent      NotificationDeliveryStatus = "sent"
+	NotificationDeliveryStatusDelivered NotificationDeliveryStatus = "delivered"
+	NotificationDeliveryStatusFailed    NotificationDeliveryStatus = "failed"
+)
+
+type NotificationDelivery struct {
+	ID             string                     `json:"id"`
+	NotificationID string                     `json:"notification_id"`
+	Channel        NotificationChannel        `json:"channel"`
+	Status         NotificationDeliveryStatus `json:"status"`
+	SentAt         *time.Time                 `json:"sent_at,omitempty"`
+}
+
+// --- OperationalAlert (Today screen's "Needs attention") ---
+
+type AlertType string
+
+const (
+	AlertTypeMissingCrew         AlertType = "missing_crew"
+	AlertTypeLateConfirmation    AlertType = "late_confirmation"
+	AlertTypeCallTimeChange      AlertType = "call_time_change"
+	AlertTypeConflict            AlertType = "conflict"
+	AlertTypeUnacknowledgedUpdate AlertType = "unacknowledged_update"
+	AlertTypeNoShow              AlertType = "no_show"
+	AlertTypeAutoSuggestedBooking AlertType = "auto_suggested_booking"
+)
+
+type AlertStatus string
+
+const (
+	AlertStatusOpen     AlertStatus = "open"
+	AlertStatusResolved AlertStatus = "resolved"
+)
+
+type OperationalAlert struct {
+	ID              string      `json:"id"`
+	JobID           string      `json:"job_id"`
+	Type            AlertType   `json:"type"`
+	RelatedEntityID *string     `json:"related_entity_id,omitempty"`
+	Status          AlertStatus `json:"status"`
+	CreatedAt       time.Time   `json:"created_at"`
+	ResolvedAt      *time.Time  `json:"resolved_at,omitempty"`
+}

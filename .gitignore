@@ -1,0 +1,17 @@
+# Backend
+backend/ralto
+backend/*.exe
+backend/ical-sidecar/__pycache__/
+backend/ical-sidecar/*.pyc
+backend/ical-sidecar/.venv/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store

@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: ralto-api
+    runtime: go
+    rootDir: backend
+    buildCommand: go build -o bin/api ./cmd/api
+    startCommand: ./bin/api
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        sync: false # Supabase Postgres connection string (Session pooler)
+      - key: JWT_SECRET
+        sync: false
+      - key: FRONTEND_ORIGINS
+        value: https://ralto.vercel.app
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: SENDGRID_API_KEY
+        sync: false
+      - key: SENDGRID_FROM_EMAIL
+        value: no-reply@ralto.io
+      - key: SENDGRID_FROM_NAME
+        value: Ralto
+      - key: ICAL_FEED_BASE_URL
+        value: https://ralto-ical.onrender.com/feed
+
+  - type: web
+    name: ralto-ical
+    runtime: python
+    rootDir: backend/ical-sidecar
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        sync: false # same Supabase Postgres connection string as ralto-api

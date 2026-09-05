@@ -1,0 +1,117 @@
+package handlers
+
+import (
+	"errors"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+
+	"ralto/internal/models"
+)
+
+func (a *API) ListVenues(w http.ResponseWriter, r *http.Request) {
+	rows, err := a.DB.Query(r.Context(),
+		`SELECT id, name, address, city, country, timezone, notes, created_at, updated_at FROM venues ORDER BY name`)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list venues")
+		return
+	}
+	defer rows.Close()
+
+	venues := []models.Venue{}
+	for rows.Next() {
+		var v models.Venue
+		if err := rows.Scan(&v.ID, &v.Name, &v.Address, &v.City, &v.Country, &v.Timezone, &v.Notes, &v.CreatedAt, &v.UpdatedAt); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list venues")
+			return
+		}
+		venues = append(venues, v)
+	}
+	writeJSON(w, http.StatusOK, venues)
+}
+
+func (a *API) GetVenue(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var v models.Venue
+	err := a.DB.QueryRow(r.Context(),
+		`SELECT id, name, address, city, country, timezone, notes, created_at, updated_at FROM venues WHERE id = $1`, id,
+	).Scan(&v.ID, &v.Name, &v.Address, &v.City, &v.Country, &v.Timezone, &v.Notes, &v.CreatedAt, &v.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "venue not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get venue")
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+type venueWriteRequest struct {
+	Name     string  `json:"name"`
+	Address  *string `json:"address"`
+	City     *string `json:"city"`
+	Country  *string `json:"country"`
+	Timezone string  `json:"timezone"`
+	Notes    *string `json:"notes"`
+}
+
+func (a *API) CreateVenue(w http.ResponseWriter, r *http.Request) {
+	var req venueWriteRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	var v models.Venue
+	err := a.DB.QueryRow(r.Context(),
+		`INSERT INTO venues (name, address, city, country, timezone, notes)
+		 VALUES ($1, $2, $3, $4, $5, $6)
+		 RETURNING id, name, address, city, country, timezone, notes, created_at, updated_at`,
+		req.Name, req.Address, req.City, req.Country, req.Timezone, req.Notes,
+	).Scan(&v.ID, &v.Name, &v.Address, &v.City, &v.Country, &v.Timezone, &v.Notes, &v.CreatedAt, &v.UpdatedAt)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to create venue")
+		return
+	}
+	writeJSON(w, http.StatusCreated, v)
+}
+
+func (a *API) UpdateVenue(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req venueWriteRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	var v models.Venue
+	err := a.DB.QueryRow(r.Context(),
+		`UPDATE venues SET name = $1, address = $2, city = $3, country = $4, timezone = $5, notes = $6, updated_at = now()
+		 WHERE id = $7
+		 RETURNING id, name, address, city, country, timezone, notes, created_at, updated_at`,
+		req.Name, req.Address, req.City, req.Country, req.Timezone, req.Notes, id,
+	).Scan(&v.ID, &v.Name, &v.Address, &v.City, &v.Country, &v.Timezone, &v.Notes, &v.CreatedAt, &v.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "venue not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to update venue")
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (a *API) DeleteVenue(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	tag, err := a.DB.Exec(r.Context(), `DELETE FROM venues WHERE id = $1`, id)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to delete venue (it may still be referenced by jobs)")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "venue not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}

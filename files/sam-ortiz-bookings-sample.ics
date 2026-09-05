@@ -1,0 +1,58 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Ralto//Crew Booking Calendar//EN
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+X-WR-CALNAME:Ralto — Sam Ortiz's bookings
+X-WR-TIMEZONE:Europe/London
+X-PUBLISHED-TTL:PT1H
+REFRESH-INTERVAL;VALUE=DURATION:PT1H
+BEGIN:VEVENT
+UID:ralto-shift-sh-ufc327-1@ralto.app
+DTSTAMP:20260905T115218Z
+DTSTART;TZID=Europe/London:20261114T140000
+DTEND;TZID=Europe/London:20261114T200000
+SUMMARY:UFC 327 — Las Vegas (EVS Operator)
+LOCATION:T-Mobile Arena\, Las Vegas
+DESCRIPTION:Client: TNT Sports\nRole: EVS Operator\nLoad-in via loading doc
+ k C. Ask for Dana on arrival for badge collection.
+STATUS:CONFIRMED
+LAST-MODIFIED:20260905T115218Z
+END:VEVENT
+BEGIN:VEVENT
+UID:ralto-shift-sh-ufc327-2@ralto.app
+DTSTAMP:20260905T115218Z
+DTSTART;TZID=Europe/London:20261115T100000
+DTEND;TZID=Europe/London:20261115T180000
+SUMMARY:UFC 327 — Las Vegas (EVS Operator)
+LOCATION:T-Mobile Arena\, Las Vegas
+DESCRIPTION:Client: TNT Sports\nRole: EVS Operator\nLoad-in via loading doc
+ k C. Ask for Dana on arrival for badge collection.
+STATUS:CONFIRMED
+LAST-MODIFIED:20260905T115218Z
+END:VEVENT
+BEGIN:VEVENT
+UID:ralto-shift-sh-ufc327-3@ralto.app
+DTSTAMP:20260905T115218Z
+DTSTART;TZID=Europe/London:20261116T070000
+DTEND;TZID=Europe/London:20261116T233000
+SUMMARY:UFC 327 — Las Vegas (EVS Operator)
+LOCATION:T-Mobile Arena\, Las Vegas
+DESCRIPTION:Client: TNT Sports\nRole: EVS Operator\nLoad-in via loading doc
+ k C. Ask for Dana on arrival for badge collection.
+STATUS:CONFIRMED
+LAST-MODIFIED:20260905T115218Z
+END:VEVENT
+BEGIN:VEVENT
+UID:ralto-shift-sh-riyadh-1@ralto.app
+DTSTAMP:20260905T115218Z
+DTSTART;TZID=Asia/Riyadh:20261205T090000
+DTEND;TZID=Asia/Riyadh:20261205T220000
+SUMMARY:Riyadh Boxing (EVS Operator)
+LOCATION:Kingdom Arena\, Riyadh
+DESCRIPTION:Client: Kingdom Sports Group\nRole: EVS Operator\nStatus: offer
+  pending your response — not yet confirmed.
+STATUS:TENTATIVE
+LAST-MODIFIED:20260905T115218Z
+END:VEVENT
+END:VCALENDAR

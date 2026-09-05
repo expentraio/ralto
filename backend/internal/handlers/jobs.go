@@ -1,0 +1,185 @@
+package handlers
+
+import (
+	"errors"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+
+	"ralto/internal/models"
+)
+
+func (a *API) ListJobs(w http.ResponseWriter, r *http.Request) {
+	rows, err := a.DB.Query(r.Context(),
+		`SELECT id, name, client_id, project_reference, venue_id, project_id, start_date, end_date,
+		        status, color_hex, notes, created_by, created_at, updated_at
+		 FROM jobs ORDER BY start_date`)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list jobs")
+		return
+	}
+	defer rows.Close()
+
+	jobs := []models.Job{}
+	for rows.Next() {
+		var j models.Job
+		if err := rows.Scan(&j.ID, &j.Name, &j.ClientID, &j.ProjectReference, &j.VenueID, &j.ProjectID,
+			&j.StartDate, &j.EndDate, &j.Status, &j.ColorHex, &j.Notes, &j.CreatedBy, &j.CreatedAt, &j.UpdatedAt); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list jobs")
+			return
+		}
+		jobs = append(jobs, j)
+	}
+	writeJSON(w, http.StatusOK, jobs)
+}
+
+func (a *API) GetJob(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var j models.Job
+	err := a.DB.QueryRow(r.Context(),
+		`SELECT id, name, client_id, project_reference, venue_id, project_id, start_date, end_date,
+		        status, color_hex, notes, created_by, created_at, updated_at
+		 FROM jobs WHERE id = $1`, id,
+	).Scan(&j.ID, &j.Name, &j.ClientID, &j.ProjectReference, &j.VenueID, &j.ProjectID,
+		&j.StartDate, &j.EndDate, &j.Status, &j.ColorHex, &j.Notes, &j.CreatedBy, &j.CreatedAt, &j.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "job not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get job")
+		return
+	}
+	writeJSON(w, http.StatusOK, j)
+}
+
+type jobWriteRequest struct {
+	Name             string           `json:"name"`
+	ClientID         string           `json:"client_id"`
+	ProjectReference *string          `json:"project_reference"`
+	VenueID          *string          `json:"venue_id"`
+	ProjectID        *string          `json:"project_id"`
+	StartDate        string           `json:"start_date"`
+	EndDate          string           `json:"end_date"`
+	Status           models.JobStatus `json:"status"`
+	ColorHex         *string          `json:"color_hex"`
+	Notes            *string          `json:"notes"`
+}
+
+func (a *API) CreateJob(w http.ResponseWriter, r *http.Request) {
+	staff, _ := staffClaimsFromContext(r)
+	var req jobWriteRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Status == "" {
+		req.Status = models.JobStatusDraft
+	}
+	var j models.Job
+	err := a.DB.QueryRow(r.Context(),
+		`INSERT INTO jobs (name, client_id, project_reference, venue_id, project_id, start_date, end_date, status, color_hex, notes, created_by)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		 RETURNING id, name, client_id, project_reference, venue_id, project_id, start_date, end_date, status, color_hex, notes, created_by, created_at, updated_at`,
+		req.Name, req.ClientID, req.ProjectReference, req.VenueID, req.ProjectID, req.StartDate, req.EndDate, req.Status, req.ColorHex, req.Notes, staff,
+	).Scan(&j.ID, &j.Name, &j.ClientID, &j.ProjectReference, &j.VenueID, &j.ProjectID,
+		&j.StartDate, &j.EndDate, &j.Status, &j.ColorHex, &j.Notes, &j.CreatedBy, &j.CreatedAt, &j.UpdatedAt)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to create job")
+		return
+	}
+	writeJSON(w, http.StatusCreated, j)
+}
+
+func (a *API) UpdateJob(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req jobWriteRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	var j models.Job
+	err := a.DB.QueryRow(r.Context(),
+		`UPDATE jobs SET name = $1, client_id = $2, project_reference = $3, venue_id = $4, project_id = $5,
+		        start_date = $6, end_date = $7, status = $8, color_hex = $9, notes = $10, updated_at = now()
+		 WHERE id = $11
+		 RETURNING id, name, client_id, project_reference, venue_id, project_id, start_date, end_date, status, color_hex, notes, created_by, created_at, updated_at`,
+		req.Name, req.ClientID, req.ProjectReference, req.VenueID, req.ProjectID, req.StartDate, req.EndDate, req.Status, req.ColorHex, req.Notes, id,
+	).Scan(&j.ID, &j.Name, &j.ClientID, &j.ProjectReference, &j.VenueID, &j.ProjectID,
+		&j.StartDate, &j.EndDate, &j.Status, &j.ColorHex, &j.Notes, &j.CreatedBy, &j.CreatedAt, &j.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "job not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to update job")
+		return
+	}
+	writeJSON(w, http.StatusOK, j)
+}
+
+func (a *API) DeleteJob(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	tag, err := a.DB.Exec(r.Context(), `DELETE FROM jobs WHERE id = $1`, id)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to delete job (it may still have requirements or bookings)")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "job not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// --- Job contacts ---
+
+func (a *API) ListJobContacts(w http.ResponseWriter, r *http.Request) {
+	jobID := chi.URLParam(r, "id")
+	rows, err := a.DB.Query(r.Context(),
+		`SELECT id, job_id, name, role_title, email, phone FROM job_contacts WHERE job_id = $1 ORDER BY name`, jobID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list job contacts")
+		return
+	}
+	defer rows.Close()
+
+	contacts := []models.JobContact{}
+	for rows.Next() {
+		var c models.JobContact
+		if err := rows.Scan(&c.ID, &c.JobID, &c.Name, &c.RoleTitle, &c.Email, &c.Phone); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list job contacts")
+			return
+		}
+		contacts = append(contacts, c)
+	}
+	writeJSON(w, http.StatusOK, contacts)
+}
+
+type jobContactWriteRequest struct {
+	Name      string  `json:"name"`
+	RoleTitle *string `json:"role_title"`
+	Email     *string `json:"email"`
+	Phone     *string `json:"phone"`
+}
+
+func (a *API) CreateJobContact(w http.ResponseWriter, r *http.Request) {
+	jobID := chi.URLParam(r, "id")
+	var req jobContactWriteRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	var c models.JobContact
+	err := a.DB.QueryRow(r.Context(),
+		`INSERT INTO job_contacts (job_id, name, role_title, email, phone) VALUES ($1, $2, $3, $4, $5)
+		 RETURNING id, job_id, name, role_title, email, phone`,
+		jobID, req.Name, req.RoleTitle, req.Email, req.Phone,
+	).Scan(&c.ID, &c.JobID, &c.Name, &c.RoleTitle, &c.Email, &c.Phone)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to create job contact")
+		return
+	}
+	writeJSON(w, http.StatusCreated, c)
+}
