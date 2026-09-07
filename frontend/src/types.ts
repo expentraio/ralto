@@ -71,6 +71,7 @@ export interface Role {
 }
 
 export type JobStatus = 'draft' | 'defining' | 'crewing' | 'confirmed' | 'briefed' | 'live' | 'complete' | 'cancelled'
+export type JobCommitment = 'pencil' | 'firm'
 
 export interface Job {
   id: string
@@ -82,6 +83,7 @@ export interface Job {
   start_date: string
   end_date: string
   status: JobStatus
+  commitment: JobCommitment
   color_hex?: string
   notes?: string
   created_by?: string
@@ -105,6 +107,7 @@ export interface JobRequirementWithCounts {
   role_name: string
   quantity_required: number
   quantity_confirmed: number
+  quantity_pencilled: number
   quantity_offered: number
   start_date: string
   end_date: string
@@ -112,7 +115,7 @@ export interface JobRequirementWithCounts {
   notes?: string
 }
 
-export type BookingStatus = 'offered' | 'confirmed' | 'declined' | 'cancelled' | 'unavailable' | 'conflict' | 'complete'
+export type BookingStatus = 'pencilled' | 'offered' | 'confirmed' | 'declined' | 'cancelled' | 'unavailable' | 'conflict' | 'complete'
 
 export interface Booking {
   id: string
@@ -148,10 +151,24 @@ export interface Candidate {
   reason?: string
 }
 
+export interface AlreadyAskedEntry {
+  person_id: string
+  name: string
+  role_name?: string
+  asked_at: string
+  responded_at?: string
+}
+
+export interface AlreadyAskedGroup {
+  awaiting_response: AlreadyAskedEntry[]
+  declined: AlreadyAskedEntry[]
+}
+
 export interface CandidateGroups {
   suitable: Candidate[]
   possible: Candidate[]
   unavailable: Candidate[]
+  already_asked: AlreadyAskedGroup
 }
 
 export type AlertType =
@@ -191,6 +208,34 @@ export interface AvailabilityRequest {
   created_at: string
 }
 
+export type ProspectiveEventStatus = 'open' | 'converted' | 'dropped'
+
+export interface ProspectiveEvent {
+  id: string
+  name: string
+  date_start: string
+  date_end: string
+  client_id?: string
+  status: ProspectiveEventStatus
+  converted_job_id?: string
+  notes?: string
+  created_at: string
+  updated_at: string
+}
+
+export type AvailabilityStatus = 'available' | 'unavailable' | 'tentative' | 'booked'
+export type AvailabilityType = 'annual_leave' | 'sick' | 'toil' | 'other'
+
+export interface Availability {
+  id: string
+  person_id: string
+  start_date: string
+  end_date: string
+  status: AvailabilityStatus
+  type?: AvailabilityType
+  notes?: string
+}
+
 export interface PersonDocument {
   id: string
   person_id: string
@@ -198,4 +243,44 @@ export interface PersonDocument {
   file_ref: string
   expiry_date?: string
   uploaded_at: string
+}
+
+// --- Resource calendar (addendum v2 §1) — "people down, dates across" ---
+
+export interface ResourceCalendarBooking {
+  id: string
+  job_id: string
+  job_name: string
+  role_name: string
+  job_status: JobStatus
+  job_commitment: JobCommitment
+  effective_color_hex?: string
+  status: BookingStatus
+  start_date: string
+  end_date: string
+  call_time?: string
+}
+
+export interface ResourceCalendarAvailabilityEntry {
+  id: string
+  status: AvailabilityStatus
+  type?: AvailabilityType
+  start_date: string
+  end_date: string
+  notes?: string
+}
+
+export interface ResourceCalendarRow {
+  person_id: string
+  name: string
+  employment_type: EmploymentType
+  bookings: ResourceCalendarBooking[]
+  availability: ResourceCalendarAvailabilityEntry[]
+}
+
+export interface ResourceCalendarResponse {
+  start_date: string
+  end_date: string
+  rows: ResourceCalendarRow[]
+  prospective_events: ProspectiveEvent[]
 }

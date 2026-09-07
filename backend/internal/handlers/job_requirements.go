@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -38,9 +40,10 @@ func (a *API) ListJobRequirements(w http.ResponseWriter, r *http.Request) {
 // from Booking rows. See ralto-data-model-v0_1.md §2.6 and §7.
 type requirementSummary struct {
 	models.JobRequirement
-	RoleName        string `json:"role_name"`
-	QuantityConfirmed int  `json:"quantity_confirmed"`
-	QuantityOffered   int  `json:"quantity_offered"`
+	RoleName          string `json:"role_name"`
+	QuantityConfirmed int    `json:"quantity_confirmed"`
+	QuantityPencilled int    `json:"quantity_pencilled"`
+	QuantityOffered   int    `json:"quantity_offered"`
 }
 
 // ListJobRequirementsWithCounts is the endpoint the Jobs/Planner screens
@@ -52,6 +55,7 @@ func (a *API) ListJobRequirementsWithCounts(w http.ResponseWriter, r *http.Reque
 		SELECT jr.id, jr.job_id, jr.role_id, jr.quantity_required, jr.start_date, jr.end_date, jr.call_time, jr.notes,
 		       ro.name AS role_name,
 		       COUNT(*) FILTER (WHERE b.status = 'confirmed') AS quantity_confirmed,
+		       COUNT(*) FILTER (WHERE b.status = 'pencilled') AS quantity_pencilled,
 		       COUNT(*) FILTER (WHERE b.status = 'offered') AS quantity_offered
 		FROM job_requirements jr
 		JOIN roles ro ON ro.id = jr.role_id
@@ -69,7 +73,7 @@ func (a *API) ListJobRequirementsWithCounts(w http.ResponseWriter, r *http.Reque
 	for rows.Next() {
 		var s requirementSummary
 		if err := rows.Scan(&s.ID, &s.JobID, &s.RoleID, &s.QuantityRequired, &s.StartDate, &s.EndDate, &s.CallTime, &s.Notes,
-			&s.RoleName, &s.QuantityConfirmed, &s.QuantityOffered); err != nil {
+			&s.RoleName, &s.QuantityConfirmed, &s.QuantityPencilled, &s.QuantityOffered); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to list job requirements")
 			return
 		}
@@ -156,28 +160,45 @@ func (a *API) DeleteJobRequirement(w http.ResponseWriter, r *http.Request) {
 // layered onto the "suitable" bucket later without changing this shape.
 
 type candidate struct {
-	PersonID        string  `json:"person_id"`
-	Name            string  `json:"name"`
-	BaseLocation    *string `json:"base_location,omitempty"`
-	PreferredStatus string  `json:"preferred_status"`
+	PersonID        string   `json:"person_id"`
+	Name            string   `json:"name"`
+	BaseLocation    *string  `json:"base_location,omitempty"`
+	PreferredStatus string   `json:"preferred_status"`
 	StandardRate    *float64 `json:"standard_rate,omitempty"`
-	RateCurrency    *string `json:"rate_currency,omitempty"`
-	Reason          *string `json:"reason,omitempty"` // set for unavailable candidates
+	RateCurrency    *string  `json:"rate_currency,omitempty"`
+	Reason          *string  `json:"reason,omitempty"` // set for unavailable candidates
+}
+
+// alreadyAskedEntry is one prior ask against this job — either a formal
+// Booking offer or a generic AvailabilityRequest — surfaced so a scheduler
+// doesn't ask the same person again. See addendum v2 §5.
+type alreadyAskedEntry struct {
+	PersonID    string     `json:"person_id"`
+	Name        string     `json:"name"`
+	RoleName    *string    `json:"role_name,omitempty"` // nil for a generic (non-role-scoped) AvailabilityRequest
+	AskedAt     time.Time  `json:"asked_at"`
+	RespondedAt *time.Time `json:"responded_at,omitempty"`
+}
+
+type alreadyAskedGroup struct {
+	AwaitingResponse []alreadyAskedEntry `json:"awaiting_response"`
+	Declined         []alreadyAskedEntry `json:"declined"`
 }
 
 type candidateGroups struct {
-	Suitable    []candidate `json:"suitable"`
-	Possible    []candidate `json:"possible"`
-	Unavailable []candidate `json:"unavailable"`
+	Suitable     []candidate       `json:"suitable"`
+	Possible     []candidate       `json:"possible"`
+	Unavailable  []candidate       `json:"unavailable"`
+	AlreadyAsked alreadyAskedGroup `json:"already_asked"`
 }
 
 func (a *API) ListCandidatesForJobRequirement(w http.ResponseWriter, r *http.Request) {
 	reqID := chi.URLParam(r, "reqId")
 
-	var roleID, startDate, endDate string
+	var jobID, roleID, startDate, endDate string
 	if err := a.DB.QueryRow(r.Context(),
-		`SELECT role_id, start_date, end_date FROM job_requirements WHERE id = $1`, reqID,
-	).Scan(&roleID, &startDate, &endDate); errors.Is(err, pgx.ErrNoRows) {
+		`SELECT job_id, role_id, start_date, end_date FROM job_requirements WHERE id = $1`, reqID,
+	).Scan(&jobID, &roleID, &startDate, &endDate); errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "job requirement not found")
 		return
 	} else if err != nil {
@@ -210,7 +231,15 @@ func (a *API) ListCandidatesForJobRequirement(w http.ResponseWriter, r *http.Req
 	}
 	defer rows.Close()
 
-	groups := candidateGroups{Suitable: []candidate{}, Possible: []candidate{}, Unavailable: []candidate{}}
+	groups := candidateGroups{
+		Suitable:    []candidate{},
+		Possible:    []candidate{},
+		Unavailable: []candidate{},
+		AlreadyAsked: alreadyAskedGroup{
+			AwaitingResponse: []alreadyAskedEntry{},
+			Declined:         []alreadyAskedEntry{},
+		},
+	}
 	for rows.Next() {
 		var c candidate
 		var markedUnavailable, alreadyBooked bool
@@ -234,5 +263,75 @@ func (a *API) ListCandidatesForJobRequirement(w http.ResponseWriter, r *http.Req
 			groups.Possible = append(groups.Possible, c)
 		}
 	}
+
+	if err := a.loadAlreadyAsked(r.Context(), jobID, &groups.AlreadyAsked); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to find candidates")
+		return
+	}
+
 	writeJSON(w, http.StatusOK, groups)
+}
+
+// loadAlreadyAsked unions the two places a decline or outstanding ask can
+// live (addendum v2 §5): a formal Booking offer (role-scoped, via whichever
+// JobRequirement on this Job it was made against) and a generic
+// AvailabilityRequest (job-scoped, no role — a date-range ask made before
+// any requirement existed to attach it to). Scoped to the whole Job, not
+// just the requirement being crewed right now, so a decline on Camera still
+// surfaces while crewing Utilities on the same job.
+func (a *API) loadAlreadyAsked(ctx context.Context, jobID string, group *alreadyAskedGroup) error {
+	bookingRows, err := a.DB.Query(ctx, `
+		SELECT p.id, p.first_name || ' ' || p.last_name, ro.name, b.status, b.offered_at, b.responded_at
+		FROM bookings b
+		JOIN job_requirements jr ON jr.id = b.job_requirement_id
+		JOIN roles ro ON ro.id = jr.role_id
+		JOIN people p ON p.id = b.person_id
+		WHERE jr.job_id = $1 AND b.status IN ('offered', 'declined')`, jobID)
+	if err != nil {
+		return err
+	}
+	defer bookingRows.Close()
+
+	for bookingRows.Next() {
+		var e alreadyAskedEntry
+		var roleName string
+		var status models.BookingStatus
+		if err := bookingRows.Scan(&e.PersonID, &e.Name, &roleName, &status, &e.AskedAt, &e.RespondedAt); err != nil {
+			return err
+		}
+		e.RoleName = &roleName
+		if status == models.BookingStatusDeclined {
+			group.Declined = append(group.Declined, e)
+		} else {
+			group.AwaitingResponse = append(group.AwaitingResponse, e)
+		}
+	}
+	if err := bookingRows.Err(); err != nil {
+		return err
+	}
+
+	requestRows, err := a.DB.Query(ctx, `
+		SELECT p.id, p.first_name || ' ' || p.last_name, ar.status, ar.response, ar.created_at, ar.responded_at
+		FROM availability_requests ar
+		JOIN people p ON p.id = ar.person_id
+		WHERE ar.job_id = $1 AND (ar.status = 'pending' OR ar.response = 'no')`, jobID)
+	if err != nil {
+		return err
+	}
+	defer requestRows.Close()
+
+	for requestRows.Next() {
+		var e alreadyAskedEntry
+		var status models.AvailabilityRequestStatus
+		var response *models.AvailabilityResponse
+		if err := requestRows.Scan(&e.PersonID, &e.Name, &status, &response, &e.AskedAt, &e.RespondedAt); err != nil {
+			return err
+		}
+		if status == models.AvailabilityRequestStatusPending {
+			group.AwaitingResponse = append(group.AwaitingResponse, e)
+		} else {
+			group.Declined = append(group.Declined, e)
+		}
+	}
+	return requestRows.Err()
 }

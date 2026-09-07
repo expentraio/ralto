@@ -1,13 +1,22 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from './api'
 import type {
+  Availability,
+  AvailabilityStatus,
+  AvailabilityType,
   Booking,
   CandidateGroups,
   Client,
   Job,
+  JobCommitment,
   JobRequirementWithCounts,
+  JobStatus,
   OperationalAlert,
   Person,
+  Project,
+  ProspectiveEvent,
+  ResourceCalendarResponse,
+  Role,
   Venue,
 } from '../types'
 
@@ -54,6 +63,85 @@ export function useAlerts() {
   return useCollection<OperationalAlert>('/alerts')
 }
 
+export function useRoles() {
+  return useCollection<Role>('/roles')
+}
+
+export function useProjects() {
+  return useCollection<Project>('/projects')
+}
+
+export interface CreateJobInput {
+  name: string
+  client_id: string
+  project_id?: string
+  venue_id?: string
+  project_reference?: string
+  start_date: string
+  end_date: string
+  status: JobStatus
+  commitment: JobCommitment
+  notes?: string
+}
+
+export function createJob(input: CreateJobInput) {
+  return api.post<Job>('/jobs', input)
+}
+
+export function createJobRequirement(
+  jobId: string,
+  input: { role_id: string; quantity_required: number; start_date: string; end_date: string; call_time?: string; notes?: string },
+) {
+  return api.post(`/jobs/${jobId}/requirements`, input)
+}
+
+export function createJobContact(jobId: string, input: { name: string; role_title?: string; email?: string; phone?: string }) {
+  return api.post(`/jobs/${jobId}/contacts`, input)
+}
+
+export function convertProspectiveEvent(eventId: string, jobId: string) {
+  return api.post(`/prospective-events/${eventId}/convert`, { job_id: jobId })
+}
+
+export function useProspectiveEvents() {
+  return useCollection<ProspectiveEvent>('/prospective-events')
+}
+
+export function createProspectiveEvent(input: { name: string; date_start: string; date_end: string; client_id?: string; notes?: string }) {
+  return api.post('/prospective-events', input)
+}
+
+export function dropProspectiveEvent(id: string) {
+  return api.post(`/prospective-events/${id}/drop`)
+}
+
+// useResourceCalendar — the "people down, dates across" read model
+// (addendum v2 §1). includeIds is session state the caller owns (a
+// scheduler searching in a specific freelancer to check against the
+// grid) — not persisted, so it's just re-sent on every request.
+export function useResourceCalendar(startDate: string, endDate: string, includeIds: string[]) {
+  const [data, setData] = useState<ResourceCalendarResponse | undefined>(undefined)
+  const [loading, setLoading] = useState(true)
+  const includeKey = includeIds.join(',')
+
+  const reload = useCallback(() => {
+    setLoading(true)
+    const params = new URLSearchParams({ start: startDate, end: endDate })
+    if (includeKey) params.set('include', includeKey)
+    return api
+      .get<ResourceCalendarResponse>(`/resource-calendar?${params.toString()}`)
+      .then(setData)
+      .finally(() => setLoading(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startDate, endDate, includeKey])
+
+  useEffect(() => {
+    reload()
+  }, [reload])
+
+  return { data, loading, reload }
+}
+
 export function useJobRequirements(jobId: string | undefined) {
   const [data, setData] = useState<JobRequirementWithCounts[]>([])
   const [loading, setLoading] = useState(true)
@@ -75,7 +163,12 @@ export function useJobRequirements(jobId: string | undefined) {
 }
 
 export function useCandidates(requirementId: string | undefined) {
-  const [data, setData] = useState<CandidateGroups>({ suitable: [], possible: [], unavailable: [] })
+  const [data, setData] = useState<CandidateGroups>({
+    suitable: [],
+    possible: [],
+    unavailable: [],
+    already_asked: { awaiting_response: [], declined: [] },
+  })
   const [loading, setLoading] = useState(true)
 
   const reload = useCallback(() => {
@@ -114,16 +207,55 @@ export function useBookingsForRequirement(requirementId: string | undefined) {
   return { data, loading, reload }
 }
 
+export function useAvailability(personId: string | undefined) {
+  const [data, setData] = useState<Availability[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const reload = useCallback(() => {
+    if (!personId) return Promise.resolve()
+    setLoading(true)
+    return api
+      .get<Availability[]>(`/people/${personId}/availability`)
+      .then(setData)
+      .finally(() => setLoading(false))
+  }, [personId])
+
+  useEffect(() => {
+    reload()
+  }, [reload])
+
+  return { data, loading, reload }
+}
+
+export function createAvailability(
+  personId: string,
+  input: { start_date: string; end_date: string; status: AvailabilityStatus; type?: AvailabilityType; notes?: string },
+) {
+  return api.post(`/people/${personId}/availability`, input)
+}
+
+export function deleteAvailability(personId: string, availabilityId: string) {
+  return api.delete(`/people/${personId}/availability/${availabilityId}`)
+}
+
 export function resolveAlert(id: string) {
   return api.post(`/alerts/${id}/resolve`)
 }
 
-export function offerBooking(requirementId: string, personId: string, startDate: string, endDate: string, callTime?: string) {
+export function offerBooking(
+  requirementId: string,
+  personId: string,
+  startDate: string,
+  endDate: string,
+  callTime?: string,
+  status: 'offered' | 'pencilled' = 'offered',
+) {
   return api.post(`/job-requirements/${requirementId}/bookings`, {
     person_id: personId,
     start_date: startDate,
     end_date: endDate,
     call_time: callTime,
+    status,
   })
 }
 
@@ -140,6 +272,7 @@ export interface JobSummary {
   requirements: JobRequirementWithCounts[]
   required: number
   confirmed: number
+  pencilled: number
   offered: number
 }
 
@@ -159,8 +292,9 @@ export function useJobSummaries() {
         const requirements = await api.get<JobRequirementWithCounts[]>(`/jobs/${job.id}/requirements`)
         const required = requirements.reduce((sum, r) => sum + r.quantity_required, 0)
         const confirmed = requirements.reduce((sum, r) => sum + r.quantity_confirmed, 0)
+        const pencilled = requirements.reduce((sum, r) => sum + r.quantity_pencilled, 0)
         const offered = requirements.reduce((sum, r) => sum + r.quantity_offered, 0)
-        return { job, requirements, required, confirmed, offered }
+        return { job, requirements, required, confirmed, pencilled, offered }
       }),
     )
     setSummaries(withRequirements)

@@ -13,7 +13,7 @@ import (
 func (a *API) ListJobs(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.DB.Query(r.Context(),
 		`SELECT id, name, client_id, project_reference, venue_id, project_id, start_date, end_date,
-		        status, color_hex, notes, created_by, created_at, updated_at
+		        status, commitment, color_hex, notes, created_by, created_at, updated_at
 		 FROM jobs ORDER BY start_date`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list jobs")
@@ -25,7 +25,7 @@ func (a *API) ListJobs(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var j models.Job
 		if err := rows.Scan(&j.ID, &j.Name, &j.ClientID, &j.ProjectReference, &j.VenueID, &j.ProjectID,
-			&j.StartDate, &j.EndDate, &j.Status, &j.ColorHex, &j.Notes, &j.CreatedBy, &j.CreatedAt, &j.UpdatedAt); err != nil {
+			&j.StartDate, &j.EndDate, &j.Status, &j.Commitment, &j.ColorHex, &j.Notes, &j.CreatedBy, &j.CreatedAt, &j.UpdatedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to list jobs")
 			return
 		}
@@ -39,10 +39,10 @@ func (a *API) GetJob(w http.ResponseWriter, r *http.Request) {
 	var j models.Job
 	err := a.DB.QueryRow(r.Context(),
 		`SELECT id, name, client_id, project_reference, venue_id, project_id, start_date, end_date,
-		        status, color_hex, notes, created_by, created_at, updated_at
+		        status, commitment, color_hex, notes, created_by, created_at, updated_at
 		 FROM jobs WHERE id = $1`, id,
 	).Scan(&j.ID, &j.Name, &j.ClientID, &j.ProjectReference, &j.VenueID, &j.ProjectID,
-		&j.StartDate, &j.EndDate, &j.Status, &j.ColorHex, &j.Notes, &j.CreatedBy, &j.CreatedAt, &j.UpdatedAt)
+		&j.StartDate, &j.EndDate, &j.Status, &j.Commitment, &j.ColorHex, &j.Notes, &j.CreatedBy, &j.CreatedAt, &j.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "job not found")
 		return
@@ -55,16 +55,17 @@ func (a *API) GetJob(w http.ResponseWriter, r *http.Request) {
 }
 
 type jobWriteRequest struct {
-	Name             string           `json:"name"`
-	ClientID         string           `json:"client_id"`
-	ProjectReference *string          `json:"project_reference"`
-	VenueID          *string          `json:"venue_id"`
-	ProjectID        *string          `json:"project_id"`
-	StartDate        string           `json:"start_date"`
-	EndDate          string           `json:"end_date"`
-	Status           models.JobStatus `json:"status"`
-	ColorHex         *string          `json:"color_hex"`
-	Notes            *string          `json:"notes"`
+	Name             string               `json:"name"`
+	ClientID         string               `json:"client_id"`
+	ProjectReference *string              `json:"project_reference"`
+	VenueID          *string              `json:"venue_id"`
+	ProjectID        *string              `json:"project_id"`
+	StartDate        string               `json:"start_date"`
+	EndDate          string               `json:"end_date"`
+	Status           models.JobStatus     `json:"status"`
+	Commitment       models.JobCommitment `json:"commitment"`
+	ColorHex         *string              `json:"color_hex"`
+	Notes            *string              `json:"notes"`
 }
 
 func (a *API) CreateJob(w http.ResponseWriter, r *http.Request) {
@@ -77,14 +78,21 @@ func (a *API) CreateJob(w http.ResponseWriter, r *http.Request) {
 	if req.Status == "" {
 		req.Status = models.JobStatusDraft
 	}
+	if req.Commitment == "" {
+		// Defaults to firm; the ProspectiveEvent "Convert to Job" flow (see
+		// prospective_events.go) is what actually wants pencil by default —
+		// that's a caller-side choice made at the point of conversion, not
+		// something this generic create endpoint can infer.
+		req.Commitment = models.JobCommitmentFirm
+	}
 	var j models.Job
 	err := a.DB.QueryRow(r.Context(),
-		`INSERT INTO jobs (name, client_id, project_reference, venue_id, project_id, start_date, end_date, status, color_hex, notes, created_by)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-		 RETURNING id, name, client_id, project_reference, venue_id, project_id, start_date, end_date, status, color_hex, notes, created_by, created_at, updated_at`,
-		req.Name, req.ClientID, req.ProjectReference, req.VenueID, req.ProjectID, req.StartDate, req.EndDate, req.Status, req.ColorHex, req.Notes, staff,
+		`INSERT INTO jobs (name, client_id, project_reference, venue_id, project_id, start_date, end_date, status, commitment, color_hex, notes, created_by)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		 RETURNING id, name, client_id, project_reference, venue_id, project_id, start_date, end_date, status, commitment, color_hex, notes, created_by, created_at, updated_at`,
+		req.Name, req.ClientID, req.ProjectReference, req.VenueID, req.ProjectID, req.StartDate, req.EndDate, req.Status, req.Commitment, req.ColorHex, req.Notes, staff,
 	).Scan(&j.ID, &j.Name, &j.ClientID, &j.ProjectReference, &j.VenueID, &j.ProjectID,
-		&j.StartDate, &j.EndDate, &j.Status, &j.ColorHex, &j.Notes, &j.CreatedBy, &j.CreatedAt, &j.UpdatedAt)
+		&j.StartDate, &j.EndDate, &j.Status, &j.Commitment, &j.ColorHex, &j.Notes, &j.CreatedBy, &j.CreatedAt, &j.UpdatedAt)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to create job")
 		return
@@ -102,12 +110,12 @@ func (a *API) UpdateJob(w http.ResponseWriter, r *http.Request) {
 	var j models.Job
 	err := a.DB.QueryRow(r.Context(),
 		`UPDATE jobs SET name = $1, client_id = $2, project_reference = $3, venue_id = $4, project_id = $5,
-		        start_date = $6, end_date = $7, status = $8, color_hex = $9, notes = $10, updated_at = now()
-		 WHERE id = $11
-		 RETURNING id, name, client_id, project_reference, venue_id, project_id, start_date, end_date, status, color_hex, notes, created_by, created_at, updated_at`,
-		req.Name, req.ClientID, req.ProjectReference, req.VenueID, req.ProjectID, req.StartDate, req.EndDate, req.Status, req.ColorHex, req.Notes, id,
+		        start_date = $6, end_date = $7, status = $8, commitment = $9, color_hex = $10, notes = $11, updated_at = now()
+		 WHERE id = $12
+		 RETURNING id, name, client_id, project_reference, venue_id, project_id, start_date, end_date, status, commitment, color_hex, notes, created_by, created_at, updated_at`,
+		req.Name, req.ClientID, req.ProjectReference, req.VenueID, req.ProjectID, req.StartDate, req.EndDate, req.Status, req.Commitment, req.ColorHex, req.Notes, id,
 	).Scan(&j.ID, &j.Name, &j.ClientID, &j.ProjectReference, &j.VenueID, &j.ProjectID,
-		&j.StartDate, &j.EndDate, &j.Status, &j.ColorHex, &j.Notes, &j.CreatedBy, &j.CreatedAt, &j.UpdatedAt)
+		&j.StartDate, &j.EndDate, &j.Status, &j.Commitment, &j.ColorHex, &j.Notes, &j.CreatedBy, &j.CreatedAt, &j.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "job not found")
 		return

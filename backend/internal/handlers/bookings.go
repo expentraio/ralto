@@ -77,23 +77,33 @@ func (a *API) ListBookingsForRequirement(w http.ResponseWriter, r *http.Request)
 }
 
 type createBookingRequest struct {
-	PersonID     string   `json:"person_id"`
-	StartDate    string   `json:"start_date"`
-	EndDate      string   `json:"end_date"`
-	CallTime     *string  `json:"call_time"`
-	RateOverride *float64 `json:"rate_override"`
-	Notes        *string  `json:"notes"`
+	PersonID     string               `json:"person_id"`
+	StartDate    string               `json:"start_date"`
+	EndDate      string               `json:"end_date"`
+	CallTime     *string              `json:"call_time"`
+	RateOverride *float64             `json:"rate_override"`
+	Notes        *string              `json:"notes"`
+	Status       models.BookingStatus `json:"status"`
 }
 
-// CreateBooking is the "Offer" action from the Planner screen — creates a
-// Booking in `offered` status and sends the booking_offered notification.
-// Rejects with 409 if the parent Job is cancelled/complete, mirroring
-// Equiptra's live project-status guard on booking creation.
+// CreateBooking is the "Offer" (or, per addendum v2 §4, "Pencil") action
+// from the Planner screen. Pencilled means you're holding someone without
+// having formally asked, so unlike an Offer it does not notify the
+// person — see PromoteBookingToOffer for the later "actually ask them"
+// step. Rejects with 409 if the parent Job is cancelled/complete,
+// mirroring Equiptra's live project-status guard on booking creation.
 func (a *API) CreateBooking(w http.ResponseWriter, r *http.Request) {
 	reqID := chi.URLParam(r, "reqId")
 	var req createBookingRequest
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Status == "" {
+		req.Status = models.BookingStatusOffered
+	}
+	if req.Status != models.BookingStatusOffered && req.Status != models.BookingStatusPencilled {
+		writeError(w, http.StatusBadRequest, "a new booking must start as pencilled or offered")
 		return
 	}
 
@@ -115,13 +125,47 @@ func (a *API) CreateBooking(w http.ResponseWriter, r *http.Request) {
 	var b models.Booking
 	err := a.DB.QueryRow(r.Context(),
 		`INSERT INTO bookings (job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override, notes, offered_at)
-		 VALUES ($1, $2, 'offered', $3, $4, $5, $6, $7, now())
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
 		 RETURNING id, job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override, offered_at, responded_at, confirmed_at, notes`,
-		reqID, req.PersonID, req.StartDate, req.EndDate, req.CallTime, req.RateOverride, req.Notes,
+		reqID, req.PersonID, req.Status, req.StartDate, req.EndDate, req.CallTime, req.RateOverride, req.Notes,
 	).Scan(&b.ID, &b.JobRequirementID, &b.PersonID, &b.Status, &b.StartDate, &b.EndDate, &b.CallTime,
 		&b.RateOverride, &b.OfferedAt, &b.RespondedAt, &b.ConfirmedAt, &b.Notes)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to create booking")
+		return
+	}
+
+	if b.Status == models.BookingStatusOffered {
+		ctx, ctxErr := a.loadBookingContext(r.Context(), b.ID)
+		if ctxErr == nil {
+			subject, body := notify.RenderBookingOffered(ctx.RoleName, ctx.JobName, ctx.DatesText, crewCTAURL("/offers/"+b.ID))
+			_ = a.notifyPerson(r.Context(), ctx.PersonID, models.NotificationTypeBookingOffered,
+				map[string]string{"role": ctx.RoleName, "job_name": ctx.JobName, "dates": ctx.DatesText}, subject, body)
+		}
+	}
+
+	writeJSON(w, http.StatusCreated, b)
+}
+
+// PromoteBookingToOffer is a scheduler turning a pencil into a formal ask —
+// the "shouldn't fire an offer notification" line in addendum v2 §4 applies
+// only up to this point; from here it behaves exactly like a booking
+// created directly as Offered.
+func (a *API) PromoteBookingToOffer(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var b models.Booking
+	err := a.DB.QueryRow(r.Context(),
+		`UPDATE bookings SET status = 'offered', offered_at = now() WHERE id = $1 AND status = 'pencilled'
+		 RETURNING id, job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override, offered_at, responded_at, confirmed_at, notes`,
+		id,
+	).Scan(&b.ID, &b.JobRequirementID, &b.PersonID, &b.Status, &b.StartDate, &b.EndDate, &b.CallTime,
+		&b.RateOverride, &b.OfferedAt, &b.RespondedAt, &b.ConfirmedAt, &b.Notes)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusConflict, "booking not found, or not currently pencilled")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to offer booking")
 		return
 	}
 
@@ -132,7 +176,7 @@ func (a *API) CreateBooking(w http.ResponseWriter, r *http.Request) {
 			map[string]string{"role": ctx.RoleName, "job_name": ctx.JobName, "dates": ctx.DatesText}, subject, body)
 	}
 
-	writeJSON(w, http.StatusCreated, b)
+	writeJSON(w, http.StatusOK, b)
 }
 
 type updateBookingRequest struct {
@@ -264,19 +308,19 @@ func (a *API) CancelBooking(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, b)
 }
 
-// DeleteBooking only allows removing a booking that's still a bare offer —
-// once anything has happened (a response, a confirmation), Cancel is the
-// correct action so the history stays real. Mirrors Equiptra's
-// history-vs-existence delete guards.
+// DeleteBooking only allows removing a booking that's still a bare
+// pencil or offer — once anything has happened (a response, a
+// confirmation), Cancel is the correct action so the history stays real.
+// Mirrors Equiptra's history-vs-existence delete guards.
 func (a *API) DeleteBooking(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	tag, err := a.DB.Exec(r.Context(), `DELETE FROM bookings WHERE id = $1 AND status = 'offered'`, id)
+	tag, err := a.DB.Exec(r.Context(), `DELETE FROM bookings WHERE id = $1 AND status IN ('pencilled', 'offered')`, id)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to delete booking")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusConflict, "booking not found, or no longer a pending offer — cancel it instead")
+		writeError(w, http.StatusConflict, "booking not found, or no longer just a pencil/offer — cancel it instead")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})

@@ -18,6 +18,7 @@ func registerStaffRoutes(r chi.Router, api *handlers.API) {
 
 		r.Get("/me", api.Me)
 		r.Patch("/users/me/password", api.ChangeOwnPassword)
+		r.Get("/resource-calendar", api.GetResourceCalendar)
 
 		r.Route("/clients", func(r chi.Router) {
 			r.Get("/", api.ListClients)
@@ -48,6 +49,16 @@ func registerStaffRoutes(r chi.Router, api *handlers.API) {
 			r.Get("/{id}", api.GetProject)
 			r.Put("/{id}", api.UpdateProject)
 			r.Delete("/{id}", api.DeleteProject)
+		})
+
+		r.Route("/prospective-events", func(r chi.Router) {
+			r.Get("/", api.ListProspectiveEvents)
+			r.Post("/", api.CreateProspectiveEvent)
+			r.Get("/{id}", api.GetProspectiveEvent)
+			r.Put("/{id}", api.UpdateProspectiveEvent)
+			r.Delete("/{id}", api.DeleteProspectiveEvent)
+			r.Post("/{id}/convert", api.ConvertProspectiveEvent)
+			r.Post("/{id}/drop", api.DropProspectiveEvent)
 		})
 
 		r.Route("/jobs", func(r chi.Router) {
@@ -100,6 +111,7 @@ func registerStaffRoutes(r chi.Router, api *handlers.API) {
 		r.Route("/bookings", func(r chi.Router) {
 			r.Put("/{id}", api.UpdateBooking)
 			r.Delete("/{id}", api.DeleteBooking)
+			r.Post("/{id}/offer", api.PromoteBookingToOffer)
 			r.Post("/{id}/confirm", api.ConfirmBooking)
 			r.Post("/{id}/cancel", api.CancelBooking)
 			r.Get("/{id}/shifts", api.ListBookingShifts)

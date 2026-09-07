@@ -1,0 +1,7 @@
+# Placeholder role list. Replace this file's contents with the real list
+# from ops before running this against a real environment — do not treat
+# the line below as an actual role.
+#
+# One role name per line. Blank lines and lines starting with # are
+# ignored.
+REPLACE_ME_WITH_REAL_ROLE_LIST

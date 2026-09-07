@@ -55,15 +55,15 @@ type Venue struct {
 // --- Project (Ralto-local grouping of Jobs — not the suite-core Project) ---
 
 type Project struct {
-	ID               string    `json:"id"`
-	Name             string    `json:"name"`
-	ClientID         *string   `json:"client_id,omitempty"`
-	DateStart        *string   `json:"date_start,omitempty"` // date, YYYY-MM-DD
-	DateEnd          *string   `json:"date_end,omitempty"`
-	SharedProjectID  *string   `json:"shared_project_id,omitempty"` // inert until suite-core exists
-	ColorHex         *string   `json:"color_hex,omitempty"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	ClientID        *string   `json:"client_id,omitempty"`
+	DateStart       *string   `json:"date_start,omitempty"` // date, YYYY-MM-DD
+	DateEnd         *string   `json:"date_end,omitempty"`
+	SharedProjectID *string   `json:"shared_project_id,omitempty"` // inert until suite-core exists
+	ColorHex        *string   `json:"color_hex,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // --- Job ---
@@ -81,21 +81,29 @@ const (
 	JobStatusCancelled JobStatus = "cancelled"
 )
 
+type JobCommitment string
+
+const (
+	JobCommitmentPencil JobCommitment = "pencil"
+	JobCommitmentFirm   JobCommitment = "firm"
+)
+
 type Job struct {
-	ID                string    `json:"id"`
-	Name              string    `json:"name"`
-	ClientID          string    `json:"client_id"`
-	ProjectReference  *string   `json:"project_reference,omitempty"`
-	VenueID           *string   `json:"venue_id,omitempty"`
-	ProjectID         *string   `json:"project_id,omitempty"`
-	StartDate         string    `json:"start_date"`
-	EndDate           string    `json:"end_date"`
-	Status            JobStatus `json:"status"`
-	ColorHex          *string   `json:"color_hex,omitempty"`
-	Notes             *string   `json:"notes,omitempty"`
-	CreatedBy         *string   `json:"created_by,omitempty"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID               string        `json:"id"`
+	Name             string        `json:"name"`
+	ClientID         string        `json:"client_id"`
+	ProjectReference *string       `json:"project_reference,omitempty"`
+	VenueID          *string       `json:"venue_id,omitempty"`
+	ProjectID        *string       `json:"project_id,omitempty"`
+	StartDate        string        `json:"start_date"`
+	EndDate          string        `json:"end_date"`
+	Status           JobStatus     `json:"status"`
+	Commitment       JobCommitment `json:"commitment"`
+	ColorHex         *string       `json:"color_hex,omitempty"`
+	Notes            *string       `json:"notes,omitempty"`
+	CreatedBy        *string       `json:"created_by,omitempty"`
+	CreatedAt        time.Time     `json:"created_at"`
+	UpdatedAt        time.Time     `json:"updated_at"`
 }
 
 type JobContact struct {
@@ -105,6 +113,29 @@ type JobContact struct {
 	RoleTitle *string `json:"role_title,omitempty"`
 	Email     *string `json:"email,omitempty"`
 	Phone     *string `json:"phone,omitempty"`
+}
+
+// --- ProspectiveEvent ---
+
+type ProspectiveEventStatus string
+
+const (
+	ProspectiveEventStatusOpen      ProspectiveEventStatus = "open"
+	ProspectiveEventStatusConverted ProspectiveEventStatus = "converted"
+	ProspectiveEventStatusDropped   ProspectiveEventStatus = "dropped"
+)
+
+type ProspectiveEvent struct {
+	ID             string                 `json:"id"`
+	Name           string                 `json:"name"`
+	DateStart      string                 `json:"date_start"`
+	DateEnd        string                 `json:"date_end"`
+	ClientID       *string                `json:"client_id,omitempty"`
+	Status         ProspectiveEventStatus `json:"status"`
+	ConvertedJobID *string                `json:"converted_job_id,omitempty"`
+	Notes          *string                `json:"notes,omitempty"`
+	CreatedAt      time.Time              `json:"created_at"`
+	UpdatedAt      time.Time              `json:"updated_at"`
 }
 
 // --- Role (master list) ---
@@ -118,14 +149,14 @@ type Role struct {
 // --- JobRequirement ---
 
 type JobRequirement struct {
-	ID                string  `json:"id"`
-	JobID             string  `json:"job_id"`
-	RoleID            string  `json:"role_id"`
-	QuantityRequired  int     `json:"quantity_required"`
-	StartDate         string  `json:"start_date"`
-	EndDate           string  `json:"end_date"`
-	CallTime          *string `json:"call_time,omitempty"`
-	Notes             *string `json:"notes,omitempty"`
+	ID               string  `json:"id"`
+	JobID            string  `json:"job_id"`
+	RoleID           string  `json:"role_id"`
+	QuantityRequired int     `json:"quantity_required"`
+	StartDate        string  `json:"start_date"`
+	EndDate          string  `json:"end_date"`
+	CallTime         *string `json:"call_time,omitempty"`
+	Notes            *string `json:"notes,omitempty"`
 }
 
 // --- Person (crew persona) ---
@@ -196,10 +227,10 @@ const (
 )
 
 type Skill struct {
-	ID             string    `json:"id"`
-	Name           string    `json:"name"`
-	Type           SkillType `json:"type"`
-	ExpiryTracked  bool      `json:"expiry_tracked"`
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	Type          SkillType `json:"type"`
+	ExpiryTracked bool      `json:"expiry_tracked"`
 }
 
 type PersonSkillStatus string
@@ -211,20 +242,20 @@ const (
 )
 
 type PersonSkill struct {
-	ID          string             `json:"id"`
-	PersonID    string             `json:"person_id"`
-	SkillID     string             `json:"skill_id"`
-	IssuedDate  *string            `json:"issued_date,omitempty"`
-	ExpiryDate  *string            `json:"expiry_date,omitempty"`
-	DocumentID  *string            `json:"document_id,omitempty"`
-	Status      PersonSkillStatus  `json:"status"`
+	ID         string            `json:"id"`
+	PersonID   string            `json:"person_id"`
+	SkillID    string            `json:"skill_id"`
+	IssuedDate *string           `json:"issued_date,omitempty"`
+	ExpiryDate *string           `json:"expiry_date,omitempty"`
+	DocumentID *string           `json:"document_id,omitempty"`
+	Status     PersonSkillStatus `json:"status"`
 }
 
 type PersonDocumentType string
 
 const (
-	PersonDocumentTypeCertification       PersonDocumentType = "certification"
-	PersonDocumentTypeVisa                PersonDocumentType = "visa"
+	PersonDocumentTypeCertification        PersonDocumentType = "certification"
+	PersonDocumentTypeVisa                 PersonDocumentType = "visa"
 	PersonDocumentTypeProductionCredential PersonDocumentType = "production_credential"
 )
 
@@ -249,6 +280,7 @@ type OvertimeRule struct {
 type BookingStatus string
 
 const (
+	BookingStatusPencilled   BookingStatus = "pencilled"
 	BookingStatusOffered     BookingStatus = "offered"
 	BookingStatusConfirmed   BookingStatus = "confirmed"
 	BookingStatusDeclined    BookingStatus = "declined"
@@ -259,18 +291,18 @@ const (
 )
 
 type Booking struct {
-	ID                string        `json:"id"`
-	JobRequirementID  string        `json:"job_requirement_id"`
-	PersonID          string        `json:"person_id"`
-	Status            BookingStatus `json:"status"`
-	StartDate         string        `json:"start_date"`
-	EndDate           string        `json:"end_date"`
-	CallTime          *string       `json:"call_time,omitempty"`
-	RateOverride      *float64      `json:"rate_override,omitempty"`
-	OfferedAt         time.Time     `json:"offered_at"`
-	RespondedAt       *time.Time    `json:"responded_at,omitempty"`
-	ConfirmedAt       *time.Time    `json:"confirmed_at,omitempty"`
-	Notes             *string       `json:"notes,omitempty"`
+	ID               string        `json:"id"`
+	JobRequirementID string        `json:"job_requirement_id"`
+	PersonID         string        `json:"person_id"`
+	Status           BookingStatus `json:"status"`
+	StartDate        string        `json:"start_date"`
+	EndDate          string        `json:"end_date"`
+	CallTime         *string       `json:"call_time,omitempty"`
+	RateOverride     *float64      `json:"rate_override,omitempty"`
+	OfferedAt        time.Time     `json:"offered_at"`
+	RespondedAt      *time.Time    `json:"responded_at,omitempty"`
+	ConfirmedAt      *time.Time    `json:"confirmed_at,omitempty"`
+	Notes            *string       `json:"notes,omitempty"`
 }
 
 type BookingShift struct {
@@ -293,18 +325,18 @@ const (
 )
 
 type Timesheet struct {
-	ID              string          `json:"id"`
-	BookingID       string          `json:"booking_id"`
-	ScheduledStart  time.Time       `json:"scheduled_start"`
-	ScheduledEnd    time.Time       `json:"scheduled_end"`
-	ActualStart     *time.Time      `json:"actual_start,omitempty"`
-	ActualEnd       *time.Time      `json:"actual_end,omitempty"`
-	BreakMinutes    int             `json:"break_minutes"`
-	Status          TimesheetStatus `json:"status"`
-	SubmittedAt     *time.Time      `json:"submitted_at,omitempty"`
-	ApprovedBy      *string         `json:"approved_by,omitempty"`
-	ApprovedAt      *time.Time      `json:"approved_at,omitempty"`
-	CalculatedCost  *float64        `json:"calculated_cost,omitempty"`
+	ID             string          `json:"id"`
+	BookingID      string          `json:"booking_id"`
+	ScheduledStart time.Time       `json:"scheduled_start"`
+	ScheduledEnd   time.Time       `json:"scheduled_end"`
+	ActualStart    *time.Time      `json:"actual_start,omitempty"`
+	ActualEnd      *time.Time      `json:"actual_end,omitempty"`
+	BreakMinutes   int             `json:"break_minutes"`
+	Status         TimesheetStatus `json:"status"`
+	SubmittedAt    *time.Time      `json:"submitted_at,omitempty"`
+	ApprovedBy     *string         `json:"approved_by,omitempty"`
+	ApprovedAt     *time.Time      `json:"approved_at,omitempty"`
+	CalculatedCost *float64        `json:"calculated_cost,omitempty"`
 }
 
 // --- Availability ---
@@ -318,12 +350,22 @@ const (
 	AvailabilityStatusBooked      AvailabilityStatus = "booked"
 )
 
+type AvailabilityType string
+
+const (
+	AvailabilityTypeAnnualLeave AvailabilityType = "annual_leave"
+	AvailabilityTypeSick        AvailabilityType = "sick"
+	AvailabilityTypeToil        AvailabilityType = "toil"
+	AvailabilityTypeOther       AvailabilityType = "other"
+)
+
 type Availability struct {
 	ID        string             `json:"id"`
 	PersonID  string             `json:"person_id"`
 	StartDate string             `json:"start_date"`
 	EndDate   string             `json:"end_date"`
 	Status    AvailabilityStatus `json:"status"`
+	Type      *AvailabilityType  `json:"type,omitempty"`
 	Notes     *string            `json:"notes,omitempty"`
 }
 
@@ -343,17 +385,17 @@ const (
 )
 
 type AvailabilityRequest struct {
-	ID                 string                     `json:"id"`
-	PersonID           string                     `json:"person_id"`
-	JobID              *string                    `json:"job_id,omitempty"`
-	StartDate          string                     `json:"start_date"`
-	EndDate            string                     `json:"end_date"`
-	Message            *string                    `json:"message,omitempty"`
-	Status             AvailabilityRequestStatus  `json:"status"`
-	Response           *AvailabilityResponse      `json:"response,omitempty"`
-	RespondedAt        *time.Time                 `json:"responded_at,omitempty"`
-	SuggestedBookingID *string                    `json:"suggested_booking_id,omitempty"`
-	CreatedAt          time.Time                  `json:"created_at"`
+	ID                 string                    `json:"id"`
+	PersonID           string                    `json:"person_id"`
+	JobID              *string                   `json:"job_id,omitempty"`
+	StartDate          string                    `json:"start_date"`
+	EndDate            string                    `json:"end_date"`
+	Message            *string                   `json:"message,omitempty"`
+	Status             AvailabilityRequestStatus `json:"status"`
+	Response           *AvailabilityResponse     `json:"response,omitempty"`
+	RespondedAt        *time.Time                `json:"responded_at,omitempty"`
+	SuggestedBookingID *string                   `json:"suggested_booking_id,omitempty"`
+	CreatedAt          time.Time                 `json:"created_at"`
 }
 
 // --- Notifications (outbound, crew-facing; channel-agnostic per the addendum) ---
@@ -361,12 +403,12 @@ type AvailabilityRequest struct {
 type NotificationType string
 
 const (
-	NotificationTypeBookingOffered        NotificationType = "booking_offered"
-	NotificationTypeBookingConfirmed      NotificationType = "booking_confirmed"
-	NotificationTypeBookingUpdated        NotificationType = "booking_updated"
-	NotificationTypeBookingCancelled      NotificationType = "booking_cancelled"
-	NotificationTypeShiftReminder         NotificationType = "shift_reminder"
-	NotificationTypeAvailabilityRequest   NotificationType = "availability_request"
+	NotificationTypeBookingOffered      NotificationType = "booking_offered"
+	NotificationTypeBookingConfirmed    NotificationType = "booking_confirmed"
+	NotificationTypeBookingUpdated      NotificationType = "booking_updated"
+	NotificationTypeBookingCancelled    NotificationType = "booking_cancelled"
+	NotificationTypeShiftReminder       NotificationType = "shift_reminder"
+	NotificationTypeAvailabilityRequest NotificationType = "availability_request"
 )
 
 type Notification struct {
@@ -380,8 +422,8 @@ type Notification struct {
 type NotificationChannel string
 
 const (
-	NotificationChannelInApp   NotificationChannel = "in_app"
-	NotificationChannelEmail   NotificationChannel = "email"
+	NotificationChannelInApp    NotificationChannel = "in_app"
+	NotificationChannelEmail    NotificationChannel = "email"
 	NotificationChannelWhatsApp NotificationChannel = "whatsapp"
 )
 
@@ -407,12 +449,12 @@ type NotificationDelivery struct {
 type AlertType string
 
 const (
-	AlertTypeMissingCrew         AlertType = "missing_crew"
-	AlertTypeLateConfirmation    AlertType = "late_confirmation"
-	AlertTypeCallTimeChange      AlertType = "call_time_change"
-	AlertTypeConflict            AlertType = "conflict"
+	AlertTypeMissingCrew          AlertType = "missing_crew"
+	AlertTypeLateConfirmation     AlertType = "late_confirmation"
+	AlertTypeCallTimeChange       AlertType = "call_time_change"
+	AlertTypeConflict             AlertType = "conflict"
 	AlertTypeUnacknowledgedUpdate AlertType = "unacknowledged_update"
-	AlertTypeNoShow              AlertType = "no_show"
+	AlertTypeNoShow               AlertType = "no_show"
 	AlertTypeAutoSuggestedBooking AlertType = "auto_suggested_booking"
 )
 
