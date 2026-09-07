@@ -70,6 +70,22 @@ export interface Role {
   category?: string
 }
 
+// Ralto's own Project (addendum v1 §1) — groups multiple Jobs under one
+// umbrella (a multi-day tournament, a season of fixtures). Distinct from
+// the future suite-core Project shared_project_id will eventually point
+// at, which doesn't exist yet.
+export interface Project {
+  id: string
+  name: string
+  client_id?: string
+  date_start?: string
+  date_end?: string
+  shared_project_id?: string
+  color_hex?: string
+  created_at: string
+  updated_at: string
+}
+
 export type JobStatus = 'draft' | 'defining' | 'crewing' | 'confirmed' | 'briefed' | 'live' | 'complete' | 'cancelled'
 export type JobCommitment = 'pencil' | 'firm'
 
