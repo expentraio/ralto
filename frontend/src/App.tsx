@@ -4,6 +4,8 @@ import { StaffAuthProvider, useStaffAuth } from './context/StaffAuthContext'
 import { CrewAuthProvider, useCrewAuth } from './context/CrewAuthContext'
 import { StaffLogin } from './pages/StaffLogin'
 import { CrewLogin } from './pages/CrewLogin'
+import { StaffChangePassword } from './pages/StaffChangePassword'
+import { CrewChangePassword } from './pages/CrewChangePassword'
 import { RaltoDesktopApp } from './pages/scheduler/RaltoDesktopApp'
 import { RaltoMobileApp } from './pages/scheduler/RaltoMobileApp'
 import { RaltoCrewApp } from './pages/crew/RaltoCrewApp'
@@ -31,6 +33,12 @@ function SchedulerShell() {
 
   if (loading) return null
   if (!user) return <StaffLogin />
+  // Gate before anything else renders: RaltoDesktopApp/RaltoMobileApp never
+  // mount while this is true, so none of their data-fetching hooks fire —
+  // there's no route to "skip past" this by navigating directly on the
+  // frontend, and the backend enforces the same restriction independently
+  // (RequireStaffPasswordSet) if it somehow were.
+  if (user.must_change_password) return <StaffChangePassword />
   return isMobile ? <RaltoMobileApp /> : <RaltoDesktopApp />
 }
 
@@ -39,6 +47,7 @@ function CrewShell() {
 
   if (loading) return null
   if (!person) return <CrewLogin />
+  if (person.must_change_password) return <CrewChangePassword />
   return <RaltoCrewApp />
 }
 
