@@ -1,9 +1,10 @@
-// cmd/seed creates the first admin user and seeds the roles table. Neither
-// exists any other way: CreateUser (internal/handlers/users.go) requires an
+// cmd/seed creates the first staff user (admin by default, --role
+// scheduler for anything else) and seeds the roles table. Neither exists
+// any other way: CreateUser (internal/handlers/users.go) requires an
 // authenticated admin session already, and there is no signup endpoint —
 // without this, a freshly-migrated database can never be logged into.
 //
-// Safe to run repeatedly: an admin email that already exists is left alone
+// Safe to run repeatedly: an email that already exists is left alone
 // (name, password, everything) and reported as such; roles are inserted
 // with ON CONFLICT (name) DO NOTHING.
 package main
@@ -25,9 +26,12 @@ import (
 	"ralto/internal/db"
 )
 
+var validRoles = map[string]bool{"admin": true, "scheduler": true}
+
 func main() {
 	adminEmail := flag.String("admin-email", "", "Email for the admin user to create")
 	adminName := flag.String("admin-name", "", "Name for the admin user to create")
+	role := flag.String("role", "admin", "Role for the user to create: admin or scheduler")
 	rolesFile := flag.String("roles-file", "seed/roles.txt", "Path to a plain-text file of role names, one per line")
 	rolesOnly := flag.Bool("roles-only", false, "Skip admin user creation")
 	adminOnly := flag.Bool("admin-only", false, "Skip role seeding")
@@ -41,6 +45,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "--admin-email and --admin-name are required unless --roles-only is set")
 		os.Exit(1)
 	}
+	if !validRoles[*role] {
+		fmt.Fprintf(os.Stderr, "--role must be admin or scheduler, got %q\n", *role)
+		os.Exit(1)
+	}
 
 	ctx := context.Background()
 	pool, err := db.Connect(ctx)
@@ -51,7 +59,7 @@ func main() {
 	defer pool.Close()
 
 	if !*rolesOnly {
-		if err := seedAdmin(ctx, pool, *adminEmail, *adminName); err != nil {
+		if err := seedAdmin(ctx, pool, *adminEmail, *adminName, *role); err != nil {
 			fmt.Fprintf(os.Stderr, "seeding admin user: %v\n", err)
 			os.Exit(1)
 		}
@@ -65,9 +73,24 @@ func main() {
 	}
 }
 
-func seedAdmin(ctx context.Context, pool *pgxpool.Pool, email, name string) error {
+// normalizeEmail mirrors internal/handlers/helpers.go's function of the
+// same name — duplicated rather than imported since this is a separate
+// main package, but it must stay behaviourally identical: this is one of
+// the write paths email normalization has to cover for the DB-level
+// lower(email) uniqueness index (migrations/0005) to hold.
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+func seedAdmin(ctx context.Context, pool *pgxpool.Pool, email, name, role string) error {
+	email = normalizeEmail(email)
+
 	var existingID string
-	err := pool.QueryRow(ctx, `SELECT id FROM users WHERE email = $1`, email).Scan(&existingID)
+	// Case-insensitive for the same reason Login is: a rerun with different
+	// casing of an email that already exists should be recognised as the
+	// same account, not attempted as a new row that then fails the unique
+	// index.
+	err := pool.QueryRow(ctx, `SELECT id FROM users WHERE lower(email) = $1`, email).Scan(&existingID)
 	if err == nil {
 		fmt.Printf("user %s already exists — password left unchanged\n", email)
 		return nil
@@ -97,13 +120,13 @@ func seedAdmin(ctx context.Context, pool *pgxpool.Pool, email, name string) erro
 	var id string
 	err = pool.QueryRow(ctx,
 		`INSERT INTO users (name, email, role, password_hash, active, must_change_password)
-		 VALUES ($1, $2, 'admin', $3, true, true) RETURNING id`,
-		name, email, string(hash),
+		 VALUES ($1, $2, $3, $4, true, true) RETURNING id`,
+		name, email, role, string(hash),
 	).Scan(&id)
 	if err != nil {
-		return fmt.Errorf("creating admin user: %w", err)
+		return fmt.Errorf("creating user: %w", err)
 	}
-	fmt.Printf("created admin user %s (%s), must_change_password=true\n", email, id)
+	fmt.Printf("created %s user %s (%s), must_change_password=true\n", role, email, id)
 	return nil
 }
 

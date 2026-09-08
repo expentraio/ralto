@@ -91,6 +91,7 @@ func (a *API) CreatePerson(w http.ResponseWriter, r *http.Request) {
 	if req.PreferredStatus == "" {
 		req.PreferredStatus = models.PreferredStatusStandard
 	}
+	req.Email = normalizeEmail(req.Email)
 	var p models.Person
 	err := scanPerson(a.DB.QueryRow(r.Context(),
 		`INSERT INTO people (first_name, last_name, email, phone, base_location, employment_type, status,
@@ -116,6 +117,7 @@ func (a *API) UpdatePerson(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	req.Email = normalizeEmail(req.Email)
 	var p models.Person
 	err := scanPerson(a.DB.QueryRow(r.Context(),
 		`UPDATE people SET first_name = $1, last_name = $2, email = $3, phone = $4, base_location = $5,

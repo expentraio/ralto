@@ -27,10 +27,14 @@ func (a *API) Login(w http.ResponseWriter, r *http.Request) {
 
 	var u models.User
 	var passwordHash string
+	// Case-insensitive on purpose: existing rows may still be mixed-case
+	// from before writes were normalized (see normalizeEmail), and a phone
+	// auto-capitalising the first letter of what someone types here
+	// shouldn't be able to fail a login that would otherwise succeed.
 	err := a.DB.QueryRow(r.Context(),
 		`SELECT id, name, email, role, active, must_change_password, created_at, updated_at, password_hash
-		 FROM users WHERE email = $1`,
-		req.Email,
+		 FROM users WHERE lower(email) = $1`,
+		normalizeEmail(req.Email),
 	).Scan(&u.ID, &u.Name, &u.Email, &u.Role, &u.Active, &u.MustChangePassword, &u.CreatedAt, &u.UpdatedAt, &passwordHash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusUnauthorized, "invalid email or password")
@@ -160,8 +164,8 @@ func (a *API) CrewLogin(w http.ResponseWriter, r *http.Request) {
 	var p models.Person
 	var passwordHash *string
 	err := scanPerson(a.DB.QueryRow(r.Context(),
-		`SELECT `+personSelectColumns+`, password_hash FROM people WHERE email = $1`,
-		req.Email,
+		`SELECT `+personSelectColumns+`, password_hash FROM people WHERE lower(email) = $1`,
+		normalizeEmail(req.Email),
 	), &p, &passwordHash)
 	if errors.Is(err, pgx.ErrNoRows) || passwordHash == nil {
 		// No account, or a Person row that exists in the crewing data but

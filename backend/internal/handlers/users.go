@@ -60,6 +60,7 @@ func (a *API) CreateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "role must be admin or scheduler")
 		return
 	}
+	req.Email = normalizeEmail(req.Email)
 
 	tempPassword, err := randomToken(12)
 	if err != nil {
@@ -100,6 +101,7 @@ func (a *API) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	req.Email = normalizeEmail(req.Email)
 
 	var u models.User
 	err := a.DB.QueryRow(r.Context(),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -46,6 +47,16 @@ func readJSON(r *http.Request, v interface{}) error {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	return dec.Decode(v)
+}
+
+// normalizeEmail is applied on every write to users.email/people.email —
+// phones auto-capitalise the first letter of an email typed into a login
+// field, and without this a scheduler-created crew account and that same
+// person's own case-variant of their address would silently collide at
+// login (Login/CrewLogin also compare case-insensitively, so this alone
+// doesn't fix lookups on already-mixed-case rows — see those handlers).
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
 }
 
 // staffClaimsFromContext returns the calling staff user's id, e.g. to stamp
