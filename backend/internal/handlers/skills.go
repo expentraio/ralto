@@ -11,7 +11,7 @@ import (
 // --- Skill (master list — a qualification/credential, distinct from Role) ---
 
 func (a *API) ListSkills(w http.ResponseWriter, r *http.Request) {
-	rows, err := a.DB.Query(r.Context(), `SELECT id, name, type, expiry_tracked FROM skills ORDER BY name`)
+	rows, err := a.DB.Query(r.Context(), `SELECT id, name, type, expiry_tracked FROM skills WHERE organisation_id = $1 ORDER BY name`, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list skills")
 		return
@@ -44,8 +44,8 @@ func (a *API) CreateSkill(w http.ResponseWriter, r *http.Request) {
 	}
 	var s models.Skill
 	err := a.DB.QueryRow(r.Context(),
-		`INSERT INTO skills (name, type, expiry_tracked) VALUES ($1, $2, $3) RETURNING id, name, type, expiry_tracked`,
-		req.Name, req.Type, req.ExpiryTracked,
+		`INSERT INTO skills (name, type, expiry_tracked, organisation_id) VALUES ($1, $2, $3, $4) RETURNING id, name, type, expiry_tracked`,
+		req.Name, req.Type, req.ExpiryTracked, currentOrgID,
 	).Scan(&s.ID, &s.Name, &s.Type, &s.ExpiryTracked)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to create skill")
@@ -73,7 +73,7 @@ func (a *API) ListPersonSkills(w http.ResponseWriter, r *http.Request) {
 		       END AS status,
 		       sk.name
 		FROM person_skills ps JOIN skills sk ON sk.id = ps.skill_id
-		WHERE ps.person_id = $1 ORDER BY ps.expiry_date NULLS LAST`, personID)
+		WHERE ps.person_id = $1 AND ps.organisation_id = $2 ORDER BY ps.expiry_date NULLS LAST`, personID, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list person skills")
 		return
@@ -108,10 +108,10 @@ func (a *API) AddPersonSkill(w http.ResponseWriter, r *http.Request) {
 	}
 	var ps models.PersonSkill
 	err := a.DB.QueryRow(r.Context(),
-		`INSERT INTO person_skills (person_id, skill_id, issued_date, expiry_date, document_id)
-		 VALUES ($1, $2, $3, $4, $5)
+		`INSERT INTO person_skills (person_id, skill_id, issued_date, expiry_date, document_id, organisation_id)
+		 VALUES ($1, $2, $3, $4, $5, $6)
 		 RETURNING id, person_id, skill_id, issued_date, expiry_date, document_id`,
-		personID, req.SkillID, req.IssuedDate, req.ExpiryDate, req.DocumentID,
+		personID, req.SkillID, req.IssuedDate, req.ExpiryDate, req.DocumentID, currentOrgID,
 	).Scan(&ps.ID, &ps.PersonID, &ps.SkillID, &ps.IssuedDate, &ps.ExpiryDate, &ps.DocumentID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to add person skill")
@@ -122,7 +122,7 @@ func (a *API) AddPersonSkill(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) RemovePersonSkill(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "personSkillId")
-	tag, err := a.DB.Exec(r.Context(), `DELETE FROM person_skills WHERE id = $1`, id)
+	tag, err := a.DB.Exec(r.Context(), `DELETE FROM person_skills WHERE id = $1 AND organisation_id = $2`, id, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to remove person skill")
 		return

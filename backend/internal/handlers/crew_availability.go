@@ -18,7 +18,7 @@ func (a *API) ListMyAvailabilityRequests(w http.ResponseWriter, r *http.Request)
 	rows, err := a.DB.Query(r.Context(),
 		`SELECT id, person_id, job_id, start_date, end_date, message, status, response, responded_at,
 		        suggested_booking_id, created_at
-		 FROM availability_requests WHERE person_id = $1 ORDER BY created_at DESC`, claims.PersonID)
+		 FROM availability_requests WHERE person_id = $1 AND organisation_id = $2 ORDER BY created_at DESC`, claims.PersonID, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list availability requests")
 		return
@@ -76,9 +76,9 @@ func (a *API) RespondToAvailabilityRequest(w http.ResponseWriter, r *http.Reques
 	var ar models.AvailabilityRequest
 	err := a.DB.QueryRow(r.Context(),
 		`UPDATE availability_requests SET status = 'responded', response = $1
-		 WHERE id = $2 AND person_id = $3
+		 WHERE id = $2 AND person_id = $3 AND organisation_id = $4
 		 RETURNING id, person_id, job_id, start_date, end_date, message, status, response, responded_at, suggested_booking_id, created_at`,
-		req.Response, requestID, claims.PersonID,
+		req.Response, requestID, claims.PersonID, currentOrgID,
 	).Scan(&ar.ID, &ar.PersonID, &ar.JobID, &ar.StartDate, &ar.EndDate, &ar.Message, &ar.Status,
 		&ar.Response, &ar.RespondedAt, &ar.SuggestedBookingID, &ar.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -93,7 +93,7 @@ func (a *API) RespondToAvailabilityRequest(w http.ResponseWriter, r *http.Reques
 	shouldAutoBook := (req.Response == models.AvailabilityResponseYes || req.Response == models.AvailabilityResponsePartially) && ar.JobID != nil
 	if shouldAutoBook {
 		var employmentType models.EmploymentType
-		if err := a.DB.QueryRow(r.Context(), `SELECT employment_type FROM people WHERE id = $1`, claims.PersonID).Scan(&employmentType); err == nil && employmentType == models.EmploymentTypeStaff {
+		if err := a.DB.QueryRow(r.Context(), `SELECT employment_type FROM people WHERE id = $1 AND organisation_id = $2`, claims.PersonID, currentOrgID).Scan(&employmentType); err == nil && employmentType == models.EmploymentTypeStaff {
 			a.autoSuggestBooking(r.Context(), ar)
 		}
 	}
@@ -115,13 +115,13 @@ func (a *API) autoSuggestBooking(ctx context.Context, ar models.AvailabilityRequ
 		SELECT jr.id, jr.start_date, jr.end_date
 		FROM job_requirements jr
 		JOIN person_roles pr ON pr.role_id = jr.role_id AND pr.person_id = $1
-		LEFT JOIN bookings b ON b.job_requirement_id = jr.id AND b.status IN ('offered', 'confirmed')
-		WHERE jr.job_id = $2
+		LEFT JOIN bookings b ON b.job_requirement_id = jr.id AND b.status IN ('offered', 'confirmed') AND b.organisation_id = $3
+		WHERE jr.job_id = $2 AND jr.organisation_id = $3
 		GROUP BY jr.id
 		HAVING jr.quantity_required > COUNT(b.id)
 		ORDER BY jr.start_date
 		LIMIT 1`,
-		ar.PersonID, *ar.JobID,
+		ar.PersonID, *ar.JobID, currentOrgID,
 	).Scan(&requirementID, &startDate, &endDate)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return // no unfilled requirement this person is suited for — scheduler books manually
@@ -133,22 +133,22 @@ func (a *API) autoSuggestBooking(ctx context.Context, ar models.AvailabilityRequ
 
 	var bookingID string
 	err = a.DB.QueryRow(ctx,
-		`INSERT INTO bookings (job_requirement_id, person_id, status, start_date, end_date, offered_at)
-		 VALUES ($1, $2, 'offered', $3, $4, now())
+		`INSERT INTO bookings (job_requirement_id, person_id, status, start_date, end_date, offered_at, organisation_id)
+		 VALUES ($1, $2, 'offered', $3, $4, now(), $5)
 		 RETURNING id`,
-		requirementID, ar.PersonID, startDate, endDate,
+		requirementID, ar.PersonID, startDate, endDate, currentOrgID,
 	).Scan(&bookingID)
 	if err != nil {
 		log.Printf("auto-suggest booking: creating draft booking: %v", err)
 		return
 	}
 
-	if _, err := a.DB.Exec(ctx, `UPDATE availability_requests SET suggested_booking_id = $1 WHERE id = $2`, bookingID, ar.ID); err != nil {
+	if _, err := a.DB.Exec(ctx, `UPDATE availability_requests SET suggested_booking_id = $1 WHERE id = $2 AND organisation_id = $3`, bookingID, ar.ID, currentOrgID); err != nil {
 		log.Printf("auto-suggest booking: linking suggested_booking_id: %v", err)
 	}
 	if _, err := a.DB.Exec(ctx,
-		`INSERT INTO operational_alerts (job_id, type, related_entity_id, status) VALUES ($1, 'auto_suggested_booking', $2, 'open')`,
-		*ar.JobID, bookingID,
+		`INSERT INTO operational_alerts (job_id, type, related_entity_id, status, organisation_id) VALUES ($1, 'auto_suggested_booking', $2, 'open', $3)`,
+		*ar.JobID, bookingID, currentOrgID,
 	); err != nil {
 		log.Printf("auto-suggest booking: raising alert: %v", err)
 	}

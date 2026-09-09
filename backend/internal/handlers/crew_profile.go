@@ -31,9 +31,9 @@ func (a *API) UpdateMyProfile(w http.ResponseWriter, r *http.Request) {
 	var p models.Person
 	err := scanPerson(a.DB.QueryRow(r.Context(),
 		`UPDATE people SET phone = $1, base_location = $2, phone_number = $3, notification_channels = $4, updated_at = now()
-		 WHERE id = $5
+		 WHERE id = $5 AND organisation_id = $6
 		 RETURNING `+personSelectColumns,
-		req.Phone, req.BaseLocation, req.PhoneNumber, req.NotificationChannels, claims.PersonID,
+		req.Phone, req.BaseLocation, req.PhoneNumber, req.NotificationChannels, claims.PersonID, currentOrgID,
 	), &p)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "person not found")
@@ -49,8 +49,8 @@ func (a *API) UpdateMyProfile(w http.ResponseWriter, r *http.Request) {
 func (a *API) ListMyDocuments(w http.ResponseWriter, r *http.Request) {
 	claims, _ := middleware.CrewFromContext(r.Context())
 	rows, err := a.DB.Query(r.Context(),
-		`SELECT id, person_id, type, file_ref, expiry_date, uploaded_at FROM person_documents WHERE person_id = $1 ORDER BY uploaded_at DESC`,
-		claims.PersonID)
+		`SELECT id, person_id, type, file_ref, expiry_date, uploaded_at FROM person_documents WHERE person_id = $1 AND organisation_id = $2 ORDER BY uploaded_at DESC`,
+		claims.PersonID, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list documents")
 		return
@@ -83,7 +83,7 @@ func (a *API) SubmitTimesheet(w http.ResponseWriter, r *http.Request) {
 	bookingID := chi.URLParam(r, "id")
 
 	var owns bool
-	if err := a.DB.QueryRow(r.Context(), `SELECT EXISTS (SELECT 1 FROM bookings WHERE id = $1 AND person_id = $2)`, bookingID, claims.PersonID).Scan(&owns); err != nil {
+	if err := a.DB.QueryRow(r.Context(), `SELECT EXISTS (SELECT 1 FROM bookings WHERE id = $1 AND person_id = $2 AND organisation_id = $3)`, bookingID, claims.PersonID, currentOrgID).Scan(&owns); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to submit timesheet")
 		return
 	}
@@ -100,14 +100,14 @@ func (a *API) SubmitTimesheet(w http.ResponseWriter, r *http.Request) {
 
 	var t models.Timesheet
 	err := a.DB.QueryRow(r.Context(),
-		`INSERT INTO timesheets (booking_id, scheduled_start, scheduled_end, actual_start, actual_end, break_minutes, status, submitted_at)
+		`INSERT INTO timesheets (booking_id, scheduled_start, scheduled_end, actual_start, actual_end, break_minutes, status, submitted_at, organisation_id)
 		 SELECT b.id, (b.start_date || ' ' || COALESCE(b.call_time, '00:00'))::timestamptz,
 		        (b.end_date || ' ' || COALESCE(b.call_time, '00:00'))::timestamptz,
-		        $2::timestamptz, $3::timestamptz, $4, 'submitted', now()
-		 FROM bookings b WHERE b.id = $1
+		        $2::timestamptz, $3::timestamptz, $4, 'submitted', now(), $5
+		 FROM bookings b WHERE b.id = $1 AND b.organisation_id = $5
 		 RETURNING id, booking_id, scheduled_start, scheduled_end, actual_start, actual_end, break_minutes,
 		           status, submitted_at, approved_by, approved_at, calculated_cost`,
-		bookingID, req.ActualStart, req.ActualEnd, req.BreakMinutes,
+		bookingID, req.ActualStart, req.ActualEnd, req.BreakMinutes, currentOrgID,
 	).Scan(&t.ID, &t.BookingID, &t.ScheduledStart, &t.ScheduledEnd, &t.ActualStart, &t.ActualEnd,
 		&t.BreakMinutes, &t.Status, &t.SubmittedAt, &t.ApprovedBy, &t.ApprovedAt, &t.CalculatedCost)
 	if err != nil {

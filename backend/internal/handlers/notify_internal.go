@@ -21,8 +21,8 @@ func (a *API) notifyPerson(ctx context.Context, personID string, notifType model
 
 	var notificationID string
 	if err := a.DB.QueryRow(ctx,
-		`INSERT INTO notifications (person_id, type, payload) VALUES ($1, $2, $3) RETURNING id`,
-		personID, notifType, string(payloadJSON),
+		`INSERT INTO notifications (person_id, type, payload, organisation_id) VALUES ($1, $2, $3, $4) RETURNING id`,
+		personID, notifType, string(payloadJSON), currentOrgID,
 	).Scan(&notificationID); err != nil {
 		return err
 	}

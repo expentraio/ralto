@@ -12,7 +12,17 @@ import (
 
 	"ralto/internal/middleware"
 	"ralto/internal/notify"
+	"ralto/internal/tenancy"
 )
+
+// currentOrgID is the one shared value every Create*/List*/Get*/Update*/
+// Delete* query on an organisation-scoped table threads through — see
+// internal/tenancy for what it stands for and docs/organisation_id_placeholder.md
+// for the full reconciliation note. A short local alias so call sites read
+// `currentOrgID` rather than the fully-qualified constant name at every
+// one of its ~80 use sites; it's still the one shared source, not
+// re-derived or re-hardcoded per handler.
+const currentOrgID = tenancy.PlaceholderOrganisationID
 
 type API struct {
 	DB *pgxpool.Pool

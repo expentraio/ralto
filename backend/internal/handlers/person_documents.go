@@ -18,8 +18,8 @@ import (
 func (a *API) ListPersonDocuments(w http.ResponseWriter, r *http.Request) {
 	personID := chi.URLParam(r, "id")
 	rows, err := a.DB.Query(r.Context(),
-		`SELECT id, person_id, type, file_ref, expiry_date, uploaded_at FROM person_documents WHERE person_id = $1 ORDER BY uploaded_at DESC`,
-		personID)
+		`SELECT id, person_id, type, file_ref, expiry_date, uploaded_at FROM person_documents WHERE person_id = $1 AND organisation_id = $2 ORDER BY uploaded_at DESC`,
+		personID, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list documents")
 		return
@@ -53,9 +53,9 @@ func (a *API) AddPersonDocument(w http.ResponseWriter, r *http.Request) {
 	}
 	var d models.PersonDocument
 	err := a.DB.QueryRow(r.Context(),
-		`INSERT INTO person_documents (person_id, type, file_ref, expiry_date) VALUES ($1, $2, $3, $4)
+		`INSERT INTO person_documents (person_id, type, file_ref, expiry_date, organisation_id) VALUES ($1, $2, $3, $4, $5)
 		 RETURNING id, person_id, type, file_ref, expiry_date, uploaded_at`,
-		personID, req.Type, req.FileRef, req.ExpiryDate,
+		personID, req.Type, req.FileRef, req.ExpiryDate, currentOrgID,
 	).Scan(&d.ID, &d.PersonID, &d.Type, &d.FileRef, &d.ExpiryDate, &d.UploadedAt)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to add document")
@@ -66,7 +66,7 @@ func (a *API) AddPersonDocument(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) RemovePersonDocument(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "documentId")
-	tag, err := a.DB.Exec(r.Context(), `DELETE FROM person_documents WHERE id = $1`, id)
+	tag, err := a.DB.Exec(r.Context(), `DELETE FROM person_documents WHERE id = $1 AND organisation_id = $2`, id, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to remove document")
 		return

@@ -80,14 +80,14 @@ func (a *API) GetResourceCalendar(w http.ResponseWriter, r *http.Request) {
 	peopleRows, err := a.DB.Query(r.Context(), `
 		SELECT p.id, p.first_name || ' ' || p.last_name, p.employment_type
 		FROM people p
-		WHERE p.status = 'active' AND (
+		WHERE p.organisation_id = $4 AND p.status = 'active' AND (
 			p.employment_type = 'staff'
 			OR p.id = ANY($3::uuid[])
-			OR EXISTS (SELECT 1 FROM bookings b WHERE b.person_id = p.id AND b.start_date <= $2 AND b.end_date >= $1)
-			OR EXISTS (SELECT 1 FROM availability av WHERE av.person_id = p.id AND av.start_date <= $2 AND av.end_date >= $1)
+			OR EXISTS (SELECT 1 FROM bookings b WHERE b.person_id = p.id AND b.organisation_id = $4 AND b.start_date <= $2 AND b.end_date >= $1)
+			OR EXISTS (SELECT 1 FROM availability av WHERE av.person_id = p.id AND av.organisation_id = $4 AND av.start_date <= $2 AND av.end_date >= $1)
 		)
 		ORDER BY p.employment_type, p.first_name, p.last_name`,
-		start, end, include)
+		start, end, include, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load resource calendar")
 		return
@@ -122,9 +122,9 @@ func (a *API) GetResourceCalendar(w http.ResponseWriter, r *http.Request) {
 		JOIN roles ro ON ro.id = jr.role_id
 		LEFT JOIN projects proj ON proj.id = j.project_id
 		LEFT JOIN clients cl ON cl.id = j.client_id
-		WHERE b.person_id = ANY($1::uuid[]) AND b.start_date <= $3 AND b.end_date >= $2
+		WHERE b.person_id = ANY($1::uuid[]) AND b.organisation_id = $4 AND b.start_date <= $3 AND b.end_date >= $2
 		ORDER BY b.start_date`,
-		personIDs, start, end)
+		personIDs, start, end, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load resource calendar")
 		return
@@ -147,9 +147,9 @@ func (a *API) GetResourceCalendar(w http.ResponseWriter, r *http.Request) {
 	availabilityRows, err := a.DB.Query(r.Context(), `
 		SELECT person_id, id, status, type, start_date, end_date, notes
 		FROM availability
-		WHERE person_id = ANY($1::uuid[]) AND start_date <= $3 AND end_date >= $2
+		WHERE person_id = ANY($1::uuid[]) AND organisation_id = $4 AND start_date <= $3 AND end_date >= $2
 		ORDER BY start_date`,
-		personIDs, start, end)
+		personIDs, start, end, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load resource calendar")
 		return
@@ -170,8 +170,8 @@ func (a *API) GetResourceCalendar(w http.ResponseWriter, r *http.Request) {
 
 	eventRows, err := a.DB.Query(r.Context(),
 		`SELECT `+prospectiveEventColumns+` FROM prospective_events
-		 WHERE status = 'open' AND date_start <= $2 AND date_end >= $1
-		 ORDER BY date_start`, start, end)
+		 WHERE status = 'open' AND organisation_id = $3 AND date_start <= $2 AND date_end >= $1
+		 ORDER BY date_start`, start, end, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load resource calendar")
 		return

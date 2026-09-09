@@ -13,7 +13,7 @@ import (
 func (a *API) ListClients(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.DB.Query(r.Context(),
 		`SELECT id, name, contact_name, contact_email, contact_phone, notes, brand_color_hex, website, created_at, updated_at
-		 FROM clients ORDER BY name`)
+		 FROM clients WHERE organisation_id = $1 ORDER BY name`, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list clients")
 		return
@@ -37,7 +37,7 @@ func (a *API) GetClient(w http.ResponseWriter, r *http.Request) {
 	var c models.Client
 	err := a.DB.QueryRow(r.Context(),
 		`SELECT id, name, contact_name, contact_email, contact_phone, notes, brand_color_hex, website, created_at, updated_at
-		 FROM clients WHERE id = $1`, id,
+		 FROM clients WHERE id = $1 AND organisation_id = $2`, id, currentOrgID,
 	).Scan(&c.ID, &c.Name, &c.ContactName, &c.ContactEmail, &c.ContactPhone, &c.Notes, &c.BrandColorHex, &c.Website, &c.CreatedAt, &c.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "client not found")
@@ -68,10 +68,10 @@ func (a *API) CreateClient(w http.ResponseWriter, r *http.Request) {
 	}
 	var c models.Client
 	err := a.DB.QueryRow(r.Context(),
-		`INSERT INTO clients (name, contact_name, contact_email, contact_phone, notes, brand_color_hex, website)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		`INSERT INTO clients (name, contact_name, contact_email, contact_phone, notes, brand_color_hex, website, organisation_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		 RETURNING id, name, contact_name, contact_email, contact_phone, notes, brand_color_hex, website, created_at, updated_at`,
-		req.Name, req.ContactName, req.ContactEmail, req.ContactPhone, req.Notes, req.BrandColorHex, req.Website,
+		req.Name, req.ContactName, req.ContactEmail, req.ContactPhone, req.Notes, req.BrandColorHex, req.Website, currentOrgID,
 	).Scan(&c.ID, &c.Name, &c.ContactName, &c.ContactEmail, &c.ContactPhone, &c.Notes, &c.BrandColorHex, &c.Website, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to create client")
@@ -91,9 +91,9 @@ func (a *API) UpdateClient(w http.ResponseWriter, r *http.Request) {
 	err := a.DB.QueryRow(r.Context(),
 		`UPDATE clients SET name = $1, contact_name = $2, contact_email = $3, contact_phone = $4,
 		        notes = $5, brand_color_hex = $6, website = $7, updated_at = now()
-		 WHERE id = $8
+		 WHERE id = $8 AND organisation_id = $9
 		 RETURNING id, name, contact_name, contact_email, contact_phone, notes, brand_color_hex, website, created_at, updated_at`,
-		req.Name, req.ContactName, req.ContactEmail, req.ContactPhone, req.Notes, req.BrandColorHex, req.Website, id,
+		req.Name, req.ContactName, req.ContactEmail, req.ContactPhone, req.Notes, req.BrandColorHex, req.Website, id, currentOrgID,
 	).Scan(&c.ID, &c.Name, &c.ContactName, &c.ContactEmail, &c.ContactPhone, &c.Notes, &c.BrandColorHex, &c.Website, &c.CreatedAt, &c.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "client not found")
@@ -108,7 +108,7 @@ func (a *API) UpdateClient(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) DeleteClient(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	tag, err := a.DB.Exec(r.Context(), `DELETE FROM clients WHERE id = $1`, id)
+	tag, err := a.DB.Exec(r.Context(), `DELETE FROM clients WHERE id = $1 AND organisation_id = $2`, id, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to delete client (it may still have jobs or projects)")
 		return

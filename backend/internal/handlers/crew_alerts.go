@@ -25,8 +25,8 @@ func (a *API) ListMyOpenAlerts(w http.ResponseWriter, r *http.Request) {
 		FROM operational_alerts oa
 		JOIN jobs j ON j.id = oa.job_id
 		JOIN bookings b ON b.id = oa.related_entity_id
-		WHERE oa.type = 'unacknowledged_update' AND oa.status = 'open' AND b.person_id = $1
-		ORDER BY oa.created_at DESC`, claims.PersonID)
+		WHERE oa.type = 'unacknowledged_update' AND oa.status = 'open' AND b.person_id = $1 AND oa.organisation_id = $2
+		ORDER BY oa.created_at DESC`, claims.PersonID, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list alerts")
 		return

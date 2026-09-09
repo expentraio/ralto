@@ -17,8 +17,8 @@ import (
 func (a *API) ListAvailabilityForPerson(w http.ResponseWriter, r *http.Request) {
 	personID := chi.URLParam(r, "id")
 	rows, err := a.DB.Query(r.Context(),
-		`SELECT id, person_id, start_date, end_date, status, type, notes FROM availability WHERE person_id = $1 ORDER BY start_date`,
-		personID)
+		`SELECT id, person_id, start_date, end_date, status, type, notes FROM availability WHERE person_id = $1 AND organisation_id = $2 ORDER BY start_date`,
+		personID, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list availability")
 		return
@@ -60,9 +60,9 @@ func (a *API) CreateAvailability(w http.ResponseWriter, r *http.Request) {
 	}
 	var av models.Availability
 	err := a.DB.QueryRow(r.Context(),
-		`INSERT INTO availability (person_id, start_date, end_date, status, type, notes) VALUES ($1, $2, $3, $4, $5, $6)
+		`INSERT INTO availability (person_id, start_date, end_date, status, type, notes, organisation_id) VALUES ($1, $2, $3, $4, $5, $6, $7)
 		 RETURNING id, person_id, start_date, end_date, status, type, notes`,
-		personID, req.StartDate, req.EndDate, req.Status, req.Type, req.Notes,
+		personID, req.StartDate, req.EndDate, req.Status, req.Type, req.Notes, currentOrgID,
 	).Scan(&av.ID, &av.PersonID, &av.StartDate, &av.EndDate, &av.Status, &av.Type, &av.Notes)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to create availability entry")
@@ -73,7 +73,7 @@ func (a *API) CreateAvailability(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) DeleteAvailability(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "availabilityId")
-	tag, err := a.DB.Exec(r.Context(), `DELETE FROM availability WHERE id = $1`, id)
+	tag, err := a.DB.Exec(r.Context(), `DELETE FROM availability WHERE id = $1 AND organisation_id = $2`, id, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to delete availability entry")
 		return

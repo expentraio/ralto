@@ -16,7 +16,7 @@ func (a *API) ListJobRequirements(w http.ResponseWriter, r *http.Request) {
 	jobID := chi.URLParam(r, "id")
 	rows, err := a.DB.Query(r.Context(),
 		`SELECT id, job_id, role_id, quantity_required, start_date, end_date, call_time, notes
-		 FROM job_requirements WHERE job_id = $1 ORDER BY start_date`, jobID)
+		 FROM job_requirements WHERE job_id = $1 AND organisation_id = $2 ORDER BY start_date`, jobID, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list job requirements")
 		return
@@ -60,9 +60,9 @@ func (a *API) ListJobRequirementsWithCounts(w http.ResponseWriter, r *http.Reque
 		FROM job_requirements jr
 		JOIN roles ro ON ro.id = jr.role_id
 		LEFT JOIN bookings b ON b.job_requirement_id = jr.id
-		WHERE jr.job_id = $1
+		WHERE jr.job_id = $1 AND jr.organisation_id = $2
 		GROUP BY jr.id, ro.name
-		ORDER BY jr.start_date`, jobID)
+		ORDER BY jr.start_date`, jobID, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list job requirements")
 		return
@@ -100,10 +100,10 @@ func (a *API) CreateJobRequirement(w http.ResponseWriter, r *http.Request) {
 	}
 	var jr models.JobRequirement
 	err := a.DB.QueryRow(r.Context(),
-		`INSERT INTO job_requirements (job_id, role_id, quantity_required, start_date, end_date, call_time, notes)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		`INSERT INTO job_requirements (job_id, role_id, quantity_required, start_date, end_date, call_time, notes, organisation_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		 RETURNING id, job_id, role_id, quantity_required, start_date, end_date, call_time, notes`,
-		jobID, req.RoleID, req.QuantityRequired, req.StartDate, req.EndDate, req.CallTime, req.Notes,
+		jobID, req.RoleID, req.QuantityRequired, req.StartDate, req.EndDate, req.CallTime, req.Notes, currentOrgID,
 	).Scan(&jr.ID, &jr.JobID, &jr.RoleID, &jr.QuantityRequired, &jr.StartDate, &jr.EndDate, &jr.CallTime, &jr.Notes)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to create job requirement")
@@ -122,9 +122,9 @@ func (a *API) UpdateJobRequirement(w http.ResponseWriter, r *http.Request) {
 	var jr models.JobRequirement
 	err := a.DB.QueryRow(r.Context(),
 		`UPDATE job_requirements SET role_id = $1, quantity_required = $2, start_date = $3, end_date = $4, call_time = $5, notes = $6
-		 WHERE id = $7
+		 WHERE id = $7 AND organisation_id = $8
 		 RETURNING id, job_id, role_id, quantity_required, start_date, end_date, call_time, notes`,
-		req.RoleID, req.QuantityRequired, req.StartDate, req.EndDate, req.CallTime, req.Notes, id,
+		req.RoleID, req.QuantityRequired, req.StartDate, req.EndDate, req.CallTime, req.Notes, id, currentOrgID,
 	).Scan(&jr.ID, &jr.JobID, &jr.RoleID, &jr.QuantityRequired, &jr.StartDate, &jr.EndDate, &jr.CallTime, &jr.Notes)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "job requirement not found")
@@ -139,7 +139,7 @@ func (a *API) UpdateJobRequirement(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) DeleteJobRequirement(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "reqId")
-	tag, err := a.DB.Exec(r.Context(), `DELETE FROM job_requirements WHERE id = $1`, id)
+	tag, err := a.DB.Exec(r.Context(), `DELETE FROM job_requirements WHERE id = $1 AND organisation_id = $2`, id, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to delete job requirement (it may still have bookings)")
 		return
@@ -197,7 +197,7 @@ func (a *API) ListCandidatesForJobRequirement(w http.ResponseWriter, r *http.Req
 
 	var jobID, roleID, startDate, endDate string
 	if err := a.DB.QueryRow(r.Context(),
-		`SELECT job_id, role_id, start_date, end_date FROM job_requirements WHERE id = $1`, reqID,
+		`SELECT job_id, role_id, start_date, end_date FROM job_requirements WHERE id = $1 AND organisation_id = $2`, reqID, currentOrgID,
 	).Scan(&jobID, &roleID, &startDate, &endDate); errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "job requirement not found")
 		return
@@ -211,19 +211,19 @@ func (a *API) ListCandidatesForJobRequirement(w http.ResponseWriter, r *http.Req
 		       p.standard_rate, p.rate_currency,
 		       EXISTS (
 		         SELECT 1 FROM availability av
-		         WHERE av.person_id = p.id AND av.status = 'unavailable'
+		         WHERE av.person_id = p.id AND av.status = 'unavailable' AND av.organisation_id = $4
 		           AND av.start_date <= $3 AND av.end_date >= $2
 		       ) AS marked_unavailable,
 		       EXISTS (
 		         SELECT 1 FROM bookings b
-		         WHERE b.person_id = p.id AND b.status IN ('offered', 'confirmed')
+		         WHERE b.person_id = p.id AND b.status IN ('offered', 'confirmed') AND b.organisation_id = $4
 		           AND b.start_date <= $3 AND b.end_date >= $2
 		       ) AS already_booked
 		FROM people p
-		JOIN person_roles pr ON pr.person_id = p.id
-		WHERE pr.role_id = $1 AND p.status = 'active'
+		JOIN person_roles pr ON pr.person_id = p.id AND pr.organisation_id = $4
+		WHERE pr.role_id = $1 AND p.status = 'active' AND p.organisation_id = $4
 		ORDER BY p.preferred_status, name`,
-		roleID, startDate, endDate,
+		roleID, startDate, endDate, currentOrgID,
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to find candidates")
@@ -286,7 +286,7 @@ func (a *API) loadAlreadyAsked(ctx context.Context, jobID string, group *already
 		JOIN job_requirements jr ON jr.id = b.job_requirement_id
 		JOIN roles ro ON ro.id = jr.role_id
 		JOIN people p ON p.id = b.person_id
-		WHERE jr.job_id = $1 AND b.status IN ('offered', 'declined')`, jobID)
+		WHERE jr.job_id = $1 AND b.status IN ('offered', 'declined') AND b.organisation_id = $2`, jobID, currentOrgID)
 	if err != nil {
 		return err
 	}
@@ -314,7 +314,7 @@ func (a *API) loadAlreadyAsked(ctx context.Context, jobID string, group *already
 		SELECT p.id, p.first_name || ' ' || p.last_name, ar.status, ar.response, ar.created_at, ar.responded_at
 		FROM availability_requests ar
 		JOIN people p ON p.id = ar.person_id
-		WHERE ar.job_id = $1 AND (ar.status = 'pending' OR ar.response = 'no')`, jobID)
+		WHERE ar.job_id = $1 AND (ar.status = 'pending' OR ar.response = 'no') AND ar.organisation_id = $2`, jobID, currentOrgID)
 	if err != nil {
 		return err
 	}

@@ -28,7 +28,7 @@ func scanPerson(row pgx.Row, p *models.Person, extra ...interface{}) error {
 }
 
 func (a *API) ListPeople(w http.ResponseWriter, r *http.Request) {
-	rows, err := a.DB.Query(r.Context(), `SELECT `+personSelectColumns+` FROM people ORDER BY first_name, last_name`)
+	rows, err := a.DB.Query(r.Context(), `SELECT `+personSelectColumns+` FROM people WHERE organisation_id = $1 ORDER BY first_name, last_name`, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list people")
 		return
@@ -50,7 +50,7 @@ func (a *API) ListPeople(w http.ResponseWriter, r *http.Request) {
 func (a *API) GetPerson(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var p models.Person
-	err := scanPerson(a.DB.QueryRow(r.Context(), `SELECT `+personSelectColumns+` FROM people WHERE id = $1`, id), &p)
+	err := scanPerson(a.DB.QueryRow(r.Context(), `SELECT `+personSelectColumns+` FROM people WHERE id = $1 AND organisation_id = $2`, id, currentOrgID), &p)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "person not found")
 		return
@@ -96,12 +96,12 @@ func (a *API) CreatePerson(w http.ResponseWriter, r *http.Request) {
 	err := scanPerson(a.DB.QueryRow(r.Context(),
 		`INSERT INTO people (first_name, last_name, email, phone, base_location, employment_type, status,
 		                      preferred_status, standard_rate, rate_currency, overtime_rule_id, notes,
-		                      phone_number, notification_channels)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		                      phone_number, notification_channels, organisation_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		 RETURNING `+personSelectColumns,
 		req.FirstName, req.LastName, req.Email, req.Phone, req.BaseLocation, req.EmploymentType, req.Status,
 		req.PreferredStatus, req.StandardRate, req.RateCurrency, req.OvertimeRuleID, req.Notes,
-		req.PhoneNumber, req.NotificationChannels,
+		req.PhoneNumber, req.NotificationChannels, currentOrgID,
 	), &p)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to create person")
@@ -123,11 +123,11 @@ func (a *API) UpdatePerson(w http.ResponseWriter, r *http.Request) {
 		`UPDATE people SET first_name = $1, last_name = $2, email = $3, phone = $4, base_location = $5,
 		        employment_type = $6, status = $7, preferred_status = $8, standard_rate = $9, rate_currency = $10,
 		        overtime_rule_id = $11, notes = $12, phone_number = $13, notification_channels = $14, updated_at = now()
-		 WHERE id = $15
+		 WHERE id = $15 AND organisation_id = $16
 		 RETURNING `+personSelectColumns,
 		req.FirstName, req.LastName, req.Email, req.Phone, req.BaseLocation, req.EmploymentType, req.Status,
 		req.PreferredStatus, req.StandardRate, req.RateCurrency, req.OvertimeRuleID, req.Notes,
-		req.PhoneNumber, req.NotificationChannels, id,
+		req.PhoneNumber, req.NotificationChannels, id, currentOrgID,
 	), &p)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "person not found")
@@ -156,7 +156,7 @@ func (a *API) DeletePerson(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "person has booking history — deactivate instead of deleting")
 		return
 	}
-	tag, err := a.DB.Exec(r.Context(), `DELETE FROM people WHERE id = $1`, id)
+	tag, err := a.DB.Exec(r.Context(), `DELETE FROM people WHERE id = $1 AND organisation_id = $2`, id, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to delete person")
 		return
@@ -180,7 +180,7 @@ func (a *API) ListPersonRoles(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.DB.Query(r.Context(),
 		`SELECT pr.id, pr.person_id, pr.role_id, pr.is_primary, ro.name
 		 FROM person_roles pr JOIN roles ro ON ro.id = pr.role_id
-		 WHERE pr.person_id = $1 ORDER BY pr.is_primary DESC, ro.name`, personID)
+		 WHERE pr.person_id = $1 AND pr.organisation_id = $2 ORDER BY pr.is_primary DESC, ro.name`, personID, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list person roles")
 		return
@@ -213,9 +213,9 @@ func (a *API) AddPersonRole(w http.ResponseWriter, r *http.Request) {
 	}
 	var pr models.PersonRole
 	err := a.DB.QueryRow(r.Context(),
-		`INSERT INTO person_roles (person_id, role_id, is_primary) VALUES ($1, $2, $3)
+		`INSERT INTO person_roles (person_id, role_id, is_primary, organisation_id) VALUES ($1, $2, $3, $4)
 		 RETURNING id, person_id, role_id, is_primary`,
-		personID, req.RoleID, req.IsPrimary,
+		personID, req.RoleID, req.IsPrimary, currentOrgID,
 	).Scan(&pr.ID, &pr.PersonID, &pr.RoleID, &pr.IsPrimary)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to add person role")
@@ -226,7 +226,7 @@ func (a *API) AddPersonRole(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) RemovePersonRole(w http.ResponseWriter, r *http.Request) {
 	personRoleID := chi.URLParam(r, "personRoleId")
-	tag, err := a.DB.Exec(r.Context(), `DELETE FROM person_roles WHERE id = $1`, personRoleID)
+	tag, err := a.DB.Exec(r.Context(), `DELETE FROM person_roles WHERE id = $1 AND organisation_id = $2`, personRoleID, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to remove person role")
 		return
@@ -251,7 +251,7 @@ func (a *API) GenerateCalendarFeedToken(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "failed to generate calendar feed token")
 		return
 	}
-	tag, err := a.DB.Exec(r.Context(), `UPDATE people SET calendar_feed_token = $1, updated_at = now() WHERE id = $2`, token, id)
+	tag, err := a.DB.Exec(r.Context(), `UPDATE people SET calendar_feed_token = $1, updated_at = now() WHERE id = $2 AND organisation_id = $3`, token, id, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to generate calendar feed token")
 		return
@@ -279,8 +279,8 @@ func (a *API) InviteToCrewApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tag, err := a.DB.Exec(r.Context(),
-		`UPDATE people SET password_hash = $1, must_change_password = true, updated_at = now() WHERE id = $2`,
-		string(hash), id,
+		`UPDATE people SET password_hash = $1, must_change_password = true, updated_at = now() WHERE id = $2 AND organisation_id = $3`,
+		string(hash), id, currentOrgID,
 	)
 	if err != nil || tag.RowsAffected() == 0 {
 		writeError(w, http.StatusNotFound, "person not found")

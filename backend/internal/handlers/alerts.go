@@ -28,8 +28,8 @@ func (a *API) ListAlerts(w http.ResponseWriter, r *http.Request) {
 		SELECT oa.id, oa.job_id, oa.type, oa.related_entity_id, oa.status, oa.created_at, oa.resolved_at, j.name
 		FROM operational_alerts oa
 		JOIN jobs j ON j.id = oa.job_id
-		WHERE oa.status::text = $1
-		ORDER BY oa.created_at DESC`, status)
+		WHERE oa.status::text = $1 AND oa.organisation_id = $2
+		ORDER BY oa.created_at DESC`, status, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list alerts")
 		return
@@ -52,9 +52,9 @@ func (a *API) ResolveAlert(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var al models.OperationalAlert
 	err := a.DB.QueryRow(r.Context(),
-		`UPDATE operational_alerts SET status = 'resolved', resolved_at = now() WHERE id = $1
+		`UPDATE operational_alerts SET status = 'resolved', resolved_at = now() WHERE id = $1 AND organisation_id = $2
 		 RETURNING id, job_id, type, related_entity_id, status, created_at, resolved_at`,
-		id,
+		id, currentOrgID,
 	).Scan(&al.ID, &al.JobID, &al.Type, &al.RelatedEntityID, &al.Status, &al.CreatedAt, &al.ResolvedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "alert not found")

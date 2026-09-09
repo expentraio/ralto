@@ -23,7 +23,7 @@ func scanProspectiveEvent(row pgx.Row, e *models.ProspectiveEvent) error {
 
 func (a *API) ListProspectiveEvents(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.DB.Query(r.Context(),
-		`SELECT `+prospectiveEventColumns+` FROM prospective_events ORDER BY date_start`)
+		`SELECT `+prospectiveEventColumns+` FROM prospective_events WHERE organisation_id = $1 ORDER BY date_start`, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list prospective events")
 		return
@@ -46,7 +46,7 @@ func (a *API) GetProspectiveEvent(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var e models.ProspectiveEvent
 	err := scanProspectiveEvent(a.DB.QueryRow(r.Context(),
-		`SELECT `+prospectiveEventColumns+` FROM prospective_events WHERE id = $1`, id), &e)
+		`SELECT `+prospectiveEventColumns+` FROM prospective_events WHERE id = $1 AND organisation_id = $2`, id, currentOrgID), &e)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "prospective event not found")
 		return
@@ -74,10 +74,10 @@ func (a *API) CreateProspectiveEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	var e models.ProspectiveEvent
 	err := scanProspectiveEvent(a.DB.QueryRow(r.Context(),
-		`INSERT INTO prospective_events (name, date_start, date_end, client_id, notes)
-		 VALUES ($1, $2, $3, $4, $5)
+		`INSERT INTO prospective_events (name, date_start, date_end, client_id, notes, organisation_id)
+		 VALUES ($1, $2, $3, $4, $5, $6)
 		 RETURNING `+prospectiveEventColumns,
-		req.Name, req.DateStart, req.DateEnd, req.ClientID, req.Notes,
+		req.Name, req.DateStart, req.DateEnd, req.ClientID, req.Notes, currentOrgID,
 	), &e)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to create prospective event")
@@ -99,9 +99,9 @@ func (a *API) UpdateProspectiveEvent(w http.ResponseWriter, r *http.Request) {
 	var e models.ProspectiveEvent
 	err := scanProspectiveEvent(a.DB.QueryRow(r.Context(),
 		`UPDATE prospective_events SET name = $1, date_start = $2, date_end = $3, client_id = $4, notes = $5, updated_at = now()
-		 WHERE id = $6
+		 WHERE id = $6 AND organisation_id = $7
 		 RETURNING `+prospectiveEventColumns,
-		req.Name, req.DateStart, req.DateEnd, req.ClientID, req.Notes, id,
+		req.Name, req.DateStart, req.DateEnd, req.ClientID, req.Notes, id, currentOrgID,
 	), &e)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "prospective event not found")
@@ -116,7 +116,7 @@ func (a *API) UpdateProspectiveEvent(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) DeleteProspectiveEvent(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	tag, err := a.DB.Exec(r.Context(), `DELETE FROM prospective_events WHERE id = $1`, id)
+	tag, err := a.DB.Exec(r.Context(), `DELETE FROM prospective_events WHERE id = $1 AND organisation_id = $2`, id, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to delete prospective event")
 		return
@@ -146,9 +146,9 @@ func (a *API) ConvertProspectiveEvent(w http.ResponseWriter, r *http.Request) {
 	var e models.ProspectiveEvent
 	err := scanProspectiveEvent(a.DB.QueryRow(r.Context(),
 		`UPDATE prospective_events SET status = 'converted', converted_job_id = $1, updated_at = now()
-		 WHERE id = $2
+		 WHERE id = $2 AND organisation_id = $3
 		 RETURNING `+prospectiveEventColumns,
-		req.JobID, id,
+		req.JobID, id, currentOrgID,
 	), &e)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "prospective event not found")
@@ -169,9 +169,9 @@ func (a *API) DropProspectiveEvent(w http.ResponseWriter, r *http.Request) {
 	var e models.ProspectiveEvent
 	err := scanProspectiveEvent(a.DB.QueryRow(r.Context(),
 		`UPDATE prospective_events SET status = 'dropped', updated_at = now()
-		 WHERE id = $1
+		 WHERE id = $1 AND organisation_id = $2
 		 RETURNING `+prospectiveEventColumns,
-		id,
+		id, currentOrgID,
 	), &e)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "prospective event not found")

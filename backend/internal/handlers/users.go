@@ -21,7 +21,7 @@ import (
 func (a *API) ListUsers(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.DB.Query(r.Context(),
 		`SELECT id, name, email, role, active, must_change_password, created_at, updated_at
-		 FROM users ORDER BY name`)
+		 FROM users WHERE organisation_id = $1 ORDER BY name`, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list users")
 		return
@@ -75,10 +75,10 @@ func (a *API) CreateUser(w http.ResponseWriter, r *http.Request) {
 
 	var u models.User
 	err = a.DB.QueryRow(r.Context(),
-		`INSERT INTO users (name, email, role, password_hash, must_change_password)
-		 VALUES ($1, $2, $3, $4, true)
+		`INSERT INTO users (name, email, role, password_hash, must_change_password, organisation_id)
+		 VALUES ($1, $2, $3, $4, true, $5)
 		 RETURNING id, name, email, role, active, must_change_password, created_at, updated_at`,
-		req.Name, req.Email, req.Role, string(hash),
+		req.Name, req.Email, req.Role, string(hash), currentOrgID,
 	).Scan(&u.ID, &u.Name, &u.Email, &u.Role, &u.Active, &u.MustChangePassword, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to create user (email may already be in use)")
@@ -106,9 +106,9 @@ func (a *API) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	var u models.User
 	err := a.DB.QueryRow(r.Context(),
 		`UPDATE users SET name = $1, email = $2, role = $3, active = $4, updated_at = now()
-		 WHERE id = $5
+		 WHERE id = $5 AND organisation_id = $6
 		 RETURNING id, name, email, role, active, must_change_password, created_at, updated_at`,
-		req.Name, req.Email, req.Role, req.Active, id,
+		req.Name, req.Email, req.Role, req.Active, id, currentOrgID,
 	).Scan(&u.ID, &u.Name, &u.Email, &u.Role, &u.Active, &u.MustChangePassword, &u.CreatedAt, &u.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "user not found")
@@ -135,8 +135,8 @@ func (a *API) AdminResetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tag, err := a.DB.Exec(r.Context(),
-		`UPDATE users SET password_hash = $1, must_change_password = true, updated_at = now() WHERE id = $2`,
-		string(hash), id,
+		`UPDATE users SET password_hash = $1, must_change_password = true, updated_at = now() WHERE id = $2 AND organisation_id = $3`,
+		string(hash), id, currentOrgID,
 	)
 	if err != nil || tag.RowsAffected() == 0 {
 		writeError(w, http.StatusNotFound, "user not found")
@@ -147,7 +147,7 @@ func (a *API) AdminResetPassword(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	tag, err := a.DB.Exec(r.Context(), `DELETE FROM users WHERE id = $1`, id)
+	tag, err := a.DB.Exec(r.Context(), `DELETE FROM users WHERE id = $1 AND organisation_id = $2`, id, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to delete user")
 		return

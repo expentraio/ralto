@@ -49,8 +49,8 @@ func scanCrewBooking(rows pgx.Rows, b *crewBookingResponse) error {
 func (a *API) ListMyBookings(w http.ResponseWriter, r *http.Request) {
 	claims, _ := middleware.CrewFromContext(r.Context())
 	rows, err := a.DB.Query(r.Context(),
-		crewBookingSelect+` WHERE b.person_id = $1 AND b.status NOT IN ('declined', 'cancelled') ORDER BY b.start_date`,
-		claims.PersonID)
+		crewBookingSelect+` WHERE b.person_id = $1 AND b.status NOT IN ('declined', 'cancelled') AND b.organisation_id = $2 ORDER BY b.start_date`,
+		claims.PersonID, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list bookings")
 		return
@@ -72,7 +72,7 @@ func (a *API) ListMyBookings(w http.ResponseWriter, r *http.Request) {
 func (a *API) GetMyBooking(w http.ResponseWriter, r *http.Request) {
 	claims, _ := middleware.CrewFromContext(r.Context())
 	id := chi.URLParam(r, "id")
-	rows, err := a.DB.Query(r.Context(), crewBookingSelect+` WHERE b.id = $1 AND b.person_id = $2`, id, claims.PersonID)
+	rows, err := a.DB.Query(r.Context(), crewBookingSelect+` WHERE b.id = $1 AND b.person_id = $2 AND b.organisation_id = $3`, id, claims.PersonID, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get booking")
 		return
@@ -123,9 +123,9 @@ func (a *API) RespondToOffer(w http.ResponseWriter, r *http.Request) {
 	err := a.DB.QueryRow(r.Context(),
 		`UPDATE bookings SET status = $1, responded_at = now(),
 		        confirmed_at = CASE WHEN $1 = 'confirmed' THEN now() ELSE confirmed_at END
-		 WHERE id = $2 AND person_id = $3 AND status = 'offered'
+		 WHERE id = $2 AND person_id = $3 AND status = 'offered' AND organisation_id = $4
 		 RETURNING id, job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override, offered_at, responded_at, confirmed_at, notes`,
-		newStatus, id, claims.PersonID,
+		newStatus, id, claims.PersonID, currentOrgID,
 	).Scan(&b.ID, &b.JobRequirementID, &b.PersonID, &b.Status, &b.StartDate, &b.EndDate, &b.CallTime,
 		&b.RateOverride, &b.OfferedAt, &b.RespondedAt, &b.ConfirmedAt, &b.Notes)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -165,10 +165,10 @@ func (a *API) GetMyBookingContact(w http.ResponseWriter, r *http.Request) {
 		JOIN jobs j ON j.id = jc.job_id
 		JOIN job_requirements jr ON jr.job_id = j.id
 		JOIN bookings b ON b.job_requirement_id = jr.id
-		WHERE b.id = $1 AND b.person_id = $2
+		WHERE b.id = $1 AND b.person_id = $2 AND b.organisation_id = $3
 		ORDER BY jc.name
 		LIMIT 1`,
-		bookingID, claims.PersonID,
+		bookingID, claims.PersonID, currentOrgID,
 	).Scan(&contact.ID, &contact.JobID, &contact.Name, &contact.RoleTitle, &contact.Email, &contact.Phone)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "no contact on file for this job")
@@ -190,7 +190,7 @@ func (a *API) AcknowledgeBooking(w http.ResponseWriter, r *http.Request) {
 	bookingID := chi.URLParam(r, "id")
 
 	var owns bool
-	if err := a.DB.QueryRow(r.Context(), `SELECT EXISTS (SELECT 1 FROM bookings WHERE id = $1 AND person_id = $2)`, bookingID, claims.PersonID).Scan(&owns); err != nil {
+	if err := a.DB.QueryRow(r.Context(), `SELECT EXISTS (SELECT 1 FROM bookings WHERE id = $1 AND person_id = $2 AND organisation_id = $3)`, bookingID, claims.PersonID, currentOrgID).Scan(&owns); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to acknowledge booking")
 		return
 	}
@@ -201,8 +201,8 @@ func (a *API) AcknowledgeBooking(w http.ResponseWriter, r *http.Request) {
 
 	if _, err := a.DB.Exec(r.Context(),
 		`UPDATE operational_alerts SET status = 'resolved', resolved_at = now()
-		 WHERE type = 'unacknowledged_update' AND related_entity_id = $1 AND status = 'open'`,
-		bookingID,
+		 WHERE type = 'unacknowledged_update' AND related_entity_id = $1 AND status = 'open' AND organisation_id = $2`,
+		bookingID, currentOrgID,
 	); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to acknowledge booking")
 		return

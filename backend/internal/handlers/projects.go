@@ -17,7 +17,7 @@ import (
 func (a *API) ListProjects(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.DB.Query(r.Context(),
 		`SELECT id, name, client_id, date_start, date_end, shared_project_id, color_hex, created_at, updated_at
-		 FROM projects ORDER BY date_start DESC NULLS LAST`)
+		 FROM projects WHERE organisation_id = $1 ORDER BY date_start DESC NULLS LAST`, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list projects")
 		return
@@ -41,7 +41,7 @@ func (a *API) GetProject(w http.ResponseWriter, r *http.Request) {
 	var p models.Project
 	err := a.DB.QueryRow(r.Context(),
 		`SELECT id, name, client_id, date_start, date_end, shared_project_id, color_hex, created_at, updated_at
-		 FROM projects WHERE id = $1`, id,
+		 FROM projects WHERE id = $1 AND organisation_id = $2`, id, currentOrgID,
 	).Scan(&p.ID, &p.Name, &p.ClientID, &p.DateStart, &p.DateEnd, &p.SharedProjectID, &p.ColorHex, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "project not found")
@@ -70,10 +70,10 @@ func (a *API) CreateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	var p models.Project
 	err := a.DB.QueryRow(r.Context(),
-		`INSERT INTO projects (name, client_id, date_start, date_end, color_hex)
-		 VALUES ($1, $2, $3, $4, $5)
+		`INSERT INTO projects (name, client_id, date_start, date_end, color_hex, organisation_id)
+		 VALUES ($1, $2, $3, $4, $5, $6)
 		 RETURNING id, name, client_id, date_start, date_end, shared_project_id, color_hex, created_at, updated_at`,
-		req.Name, req.ClientID, req.DateStart, req.DateEnd, req.ColorHex,
+		req.Name, req.ClientID, req.DateStart, req.DateEnd, req.ColorHex, currentOrgID,
 	).Scan(&p.ID, &p.Name, &p.ClientID, &p.DateStart, &p.DateEnd, &p.SharedProjectID, &p.ColorHex, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to create project")
@@ -92,9 +92,9 @@ func (a *API) UpdateProject(w http.ResponseWriter, r *http.Request) {
 	var p models.Project
 	err := a.DB.QueryRow(r.Context(),
 		`UPDATE projects SET name = $1, client_id = $2, date_start = $3, date_end = $4, color_hex = $5, updated_at = now()
-		 WHERE id = $6
+		 WHERE id = $6 AND organisation_id = $7
 		 RETURNING id, name, client_id, date_start, date_end, shared_project_id, color_hex, created_at, updated_at`,
-		req.Name, req.ClientID, req.DateStart, req.DateEnd, req.ColorHex, id,
+		req.Name, req.ClientID, req.DateStart, req.DateEnd, req.ColorHex, id, currentOrgID,
 	).Scan(&p.ID, &p.Name, &p.ClientID, &p.DateStart, &p.DateEnd, &p.SharedProjectID, &p.ColorHex, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "project not found")
@@ -113,7 +113,7 @@ func (a *API) DeleteProject(w http.ResponseWriter, r *http.Request) {
 	// Jobs carry that history. ON DELETE SET NULL on jobs.project_id (see
 	// migrations/0001_init.sql) means deleting a Project un-groups its Jobs
 	// rather than cascading destructively into real crewing data.
-	tag, err := a.DB.Exec(r.Context(), `DELETE FROM projects WHERE id = $1`, id)
+	tag, err := a.DB.Exec(r.Context(), `DELETE FROM projects WHERE id = $1 AND organisation_id = $2`, id, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to delete project")
 		return

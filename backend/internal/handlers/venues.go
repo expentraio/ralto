@@ -12,7 +12,7 @@ import (
 
 func (a *API) ListVenues(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.DB.Query(r.Context(),
-		`SELECT id, name, address, city, country, timezone, notes, created_at, updated_at FROM venues ORDER BY name`)
+		`SELECT id, name, address, city, country, timezone, notes, created_at, updated_at FROM venues WHERE organisation_id = $1 ORDER BY name`, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list venues")
 		return
@@ -35,7 +35,7 @@ func (a *API) GetVenue(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var v models.Venue
 	err := a.DB.QueryRow(r.Context(),
-		`SELECT id, name, address, city, country, timezone, notes, created_at, updated_at FROM venues WHERE id = $1`, id,
+		`SELECT id, name, address, city, country, timezone, notes, created_at, updated_at FROM venues WHERE id = $1 AND organisation_id = $2`, id, currentOrgID,
 	).Scan(&v.ID, &v.Name, &v.Address, &v.City, &v.Country, &v.Timezone, &v.Notes, &v.CreatedAt, &v.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "venue not found")
@@ -65,10 +65,10 @@ func (a *API) CreateVenue(w http.ResponseWriter, r *http.Request) {
 	}
 	var v models.Venue
 	err := a.DB.QueryRow(r.Context(),
-		`INSERT INTO venues (name, address, city, country, timezone, notes)
-		 VALUES ($1, $2, $3, $4, $5, $6)
+		`INSERT INTO venues (name, address, city, country, timezone, notes, organisation_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
 		 RETURNING id, name, address, city, country, timezone, notes, created_at, updated_at`,
-		req.Name, req.Address, req.City, req.Country, req.Timezone, req.Notes,
+		req.Name, req.Address, req.City, req.Country, req.Timezone, req.Notes, currentOrgID,
 	).Scan(&v.ID, &v.Name, &v.Address, &v.City, &v.Country, &v.Timezone, &v.Notes, &v.CreatedAt, &v.UpdatedAt)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to create venue")
@@ -87,9 +87,9 @@ func (a *API) UpdateVenue(w http.ResponseWriter, r *http.Request) {
 	var v models.Venue
 	err := a.DB.QueryRow(r.Context(),
 		`UPDATE venues SET name = $1, address = $2, city = $3, country = $4, timezone = $5, notes = $6, updated_at = now()
-		 WHERE id = $7
+		 WHERE id = $7 AND organisation_id = $8
 		 RETURNING id, name, address, city, country, timezone, notes, created_at, updated_at`,
-		req.Name, req.Address, req.City, req.Country, req.Timezone, req.Notes, id,
+		req.Name, req.Address, req.City, req.Country, req.Timezone, req.Notes, id, currentOrgID,
 	).Scan(&v.ID, &v.Name, &v.Address, &v.City, &v.Country, &v.Timezone, &v.Notes, &v.CreatedAt, &v.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "venue not found")
@@ -104,7 +104,7 @@ func (a *API) UpdateVenue(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) DeleteVenue(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	tag, err := a.DB.Exec(r.Context(), `DELETE FROM venues WHERE id = $1`, id)
+	tag, err := a.DB.Exec(r.Context(), `DELETE FROM venues WHERE id = $1 AND organisation_id = $2`, id, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to delete venue (it may still be referenced by jobs)")
 		return

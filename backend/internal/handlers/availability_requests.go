@@ -11,7 +11,7 @@ func (a *API) ListAvailabilityRequests(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.DB.Query(r.Context(),
 		`SELECT id, person_id, job_id, start_date, end_date, message, status, response, responded_at,
 		        suggested_booking_id, created_at
-		 FROM availability_requests ORDER BY created_at DESC`)
+		 FROM availability_requests WHERE organisation_id = $1 ORDER BY created_at DESC`, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list availability requests")
 		return
@@ -48,10 +48,10 @@ func (a *API) CreateAvailabilityRequest(w http.ResponseWriter, r *http.Request) 
 	}
 	var ar models.AvailabilityRequest
 	err := a.DB.QueryRow(r.Context(),
-		`INSERT INTO availability_requests (person_id, job_id, start_date, end_date, message, status)
-		 VALUES ($1, $2, $3, $4, $5, 'pending')
+		`INSERT INTO availability_requests (person_id, job_id, start_date, end_date, message, status, organisation_id)
+		 VALUES ($1, $2, $3, $4, $5, 'pending', $6)
 		 RETURNING id, person_id, job_id, start_date, end_date, message, status, response, responded_at, suggested_booking_id, created_at`,
-		req.PersonID, req.JobID, req.StartDate, req.EndDate, req.Message,
+		req.PersonID, req.JobID, req.StartDate, req.EndDate, req.Message, currentOrgID,
 	).Scan(&ar.ID, &ar.PersonID, &ar.JobID, &ar.StartDate, &ar.EndDate, &ar.Message, &ar.Status,
 		&ar.Response, &ar.RespondedAt, &ar.SuggestedBookingID, &ar.CreatedAt)
 	if err != nil {

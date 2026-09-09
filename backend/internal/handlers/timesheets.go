@@ -18,12 +18,12 @@ func (a *API) ListTimesheets(w http.ResponseWriter, r *http.Request) {
 		rows, err = a.DB.Query(r.Context(),
 			`SELECT id, booking_id, scheduled_start, scheduled_end, actual_start, actual_end, break_minutes,
 			        status, submitted_at, approved_by, approved_at, calculated_cost
-			 FROM timesheets WHERE status::text = $1 ORDER BY submitted_at DESC NULLS LAST`, statusFilter)
+			 FROM timesheets WHERE status::text = $1 AND organisation_id = $2 ORDER BY submitted_at DESC NULLS LAST`, statusFilter, currentOrgID)
 	} else {
 		rows, err = a.DB.Query(r.Context(),
 			`SELECT id, booking_id, scheduled_start, scheduled_end, actual_start, actual_end, break_minutes,
 			        status, submitted_at, approved_by, approved_at, calculated_cost
-			 FROM timesheets ORDER BY submitted_at DESC NULLS LAST`)
+			 FROM timesheets WHERE organisation_id = $1 ORDER BY submitted_at DESC NULLS LAST`, currentOrgID)
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list timesheets")
@@ -50,7 +50,7 @@ func (a *API) GetTimesheet(w http.ResponseWriter, r *http.Request) {
 	err := a.DB.QueryRow(r.Context(),
 		`SELECT id, booking_id, scheduled_start, scheduled_end, actual_start, actual_end, break_minutes,
 		        status, submitted_at, approved_by, approved_at, calculated_cost
-		 FROM timesheets WHERE id = $1`, id,
+		 FROM timesheets WHERE id = $1 AND organisation_id = $2`, id, currentOrgID,
 	).Scan(&t.ID, &t.BookingID, &t.ScheduledStart, &t.ScheduledEnd, &t.ActualStart, &t.ActualEnd,
 		&t.BreakMinutes, &t.Status, &t.SubmittedAt, &t.ApprovedBy, &t.ApprovedAt, &t.CalculatedCost)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -83,7 +83,7 @@ func (a *API) ApproveTimesheet(w http.ResponseWriter, r *http.Request) {
 		JOIN bookings b ON b.id = t.booking_id
 		JOIN people p ON p.id = b.person_id
 		LEFT JOIN overtime_rules ot ON ot.id = p.overtime_rule_id
-		WHERE t.id = $1`, id,
+		WHERE t.id = $1 AND t.organisation_id = $2`, id, currentOrgID,
 	).Scan(&actualStart, &actualEnd, &breakMinutes, &rate, &thresholdHours, &multiplier)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "timesheet not found")
@@ -99,10 +99,10 @@ func (a *API) ApproveTimesheet(w http.ResponseWriter, r *http.Request) {
 	var t models.Timesheet
 	err = a.DB.QueryRow(r.Context(),
 		`UPDATE timesheets SET status = 'approved', approved_by = $1, approved_at = now(), calculated_cost = $2
-		 WHERE id = $3
+		 WHERE id = $3 AND organisation_id = $4
 		 RETURNING id, booking_id, scheduled_start, scheduled_end, actual_start, actual_end, break_minutes,
 		           status, submitted_at, approved_by, approved_at, calculated_cost`,
-		approverID, cost, id,
+		approverID, cost, id, currentOrgID,
 	).Scan(&t.ID, &t.BookingID, &t.ScheduledStart, &t.ScheduledEnd, &t.ActualStart, &t.ActualEnd,
 		&t.BreakMinutes, &t.Status, &t.SubmittedAt, &t.ApprovedBy, &t.ApprovedAt, &t.CalculatedCost)
 	if err != nil {
@@ -128,10 +128,10 @@ func (a *API) RejectTimesheet(w http.ResponseWriter, r *http.Request) {
 	var t models.Timesheet
 	err := a.DB.QueryRow(r.Context(),
 		`UPDATE timesheets SET status = 'rejected', approved_by = $1, approved_at = now()
-		 WHERE id = $2
+		 WHERE id = $2 AND organisation_id = $3
 		 RETURNING id, booking_id, scheduled_start, scheduled_end, actual_start, actual_end, break_minutes,
 		           status, submitted_at, approved_by, approved_at, calculated_cost`,
-		approverID, id,
+		approverID, id, currentOrgID,
 	).Scan(&t.ID, &t.BookingID, &t.ScheduledStart, &t.ScheduledEnd, &t.ActualStart, &t.ActualEnd,
 		&t.BreakMinutes, &t.Status, &t.SubmittedAt, &t.ApprovedBy, &t.ApprovedAt, &t.CalculatedCost)
 	if errors.Is(err, pgx.ErrNoRows) {

@@ -15,7 +15,7 @@ import (
 // work. Small enough a list that no pagination/search is needed for v1.
 
 func (a *API) ListRoles(w http.ResponseWriter, r *http.Request) {
-	rows, err := a.DB.Query(r.Context(), `SELECT id, name, category FROM roles ORDER BY name`)
+	rows, err := a.DB.Query(r.Context(), `SELECT id, name, category FROM roles WHERE organisation_id = $1 ORDER BY name`, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list roles")
 		return
@@ -47,8 +47,8 @@ func (a *API) CreateRole(w http.ResponseWriter, r *http.Request) {
 	}
 	var role models.Role
 	err := a.DB.QueryRow(r.Context(),
-		`INSERT INTO roles (name, category) VALUES ($1, $2) RETURNING id, name, category`,
-		req.Name, req.Category,
+		`INSERT INTO roles (name, category, organisation_id) VALUES ($1, $2, $3) RETURNING id, name, category`,
+		req.Name, req.Category, currentOrgID,
 	).Scan(&role.ID, &role.Name, &role.Category)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to create role")
@@ -66,8 +66,8 @@ func (a *API) UpdateRole(w http.ResponseWriter, r *http.Request) {
 	}
 	var role models.Role
 	err := a.DB.QueryRow(r.Context(),
-		`UPDATE roles SET name = $1, category = $2 WHERE id = $3 RETURNING id, name, category`,
-		req.Name, req.Category, id,
+		`UPDATE roles SET name = $1, category = $2 WHERE id = $3 AND organisation_id = $4 RETURNING id, name, category`,
+		req.Name, req.Category, id, currentOrgID,
 	).Scan(&role.ID, &role.Name, &role.Category)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "role not found")
@@ -82,7 +82,7 @@ func (a *API) UpdateRole(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) DeleteRole(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	tag, err := a.DB.Exec(r.Context(), `DELETE FROM roles WHERE id = $1`, id)
+	tag, err := a.DB.Exec(r.Context(), `DELETE FROM roles WHERE id = $1 AND organisation_id = $2`, id, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to delete role (it may still be referenced by people or job requirements)")
 		return

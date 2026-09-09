@@ -17,7 +17,7 @@ import (
 func (a *API) ListBookingShifts(w http.ResponseWriter, r *http.Request) {
 	bookingID := chi.URLParam(r, "id")
 	rows, err := a.DB.Query(r.Context(),
-		`SELECT id, booking_id, date, call_time, end_time, notes FROM booking_shifts WHERE booking_id = $1 ORDER BY date`, bookingID)
+		`SELECT id, booking_id, date, call_time, end_time, notes FROM booking_shifts WHERE booking_id = $1 AND organisation_id = $2 ORDER BY date`, bookingID, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list booking shifts")
 		return
@@ -52,9 +52,9 @@ func (a *API) AddBookingShift(w http.ResponseWriter, r *http.Request) {
 	}
 	var s models.BookingShift
 	err := a.DB.QueryRow(r.Context(),
-		`INSERT INTO booking_shifts (booking_id, date, call_time, end_time, notes) VALUES ($1, $2, $3, $4, $5)
+		`INSERT INTO booking_shifts (booking_id, date, call_time, end_time, notes, organisation_id) VALUES ($1, $2, $3, $4, $5, $6)
 		 RETURNING id, booking_id, date, call_time, end_time, notes`,
-		bookingID, req.Date, req.CallTime, req.EndTime, req.Notes,
+		bookingID, req.Date, req.CallTime, req.EndTime, req.Notes, currentOrgID,
 	).Scan(&s.ID, &s.BookingID, &s.Date, &s.CallTime, &s.EndTime, &s.Notes)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to add booking shift")
@@ -65,7 +65,7 @@ func (a *API) AddBookingShift(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) RemoveBookingShift(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "shiftId")
-	tag, err := a.DB.Exec(r.Context(), `DELETE FROM booking_shifts WHERE id = $1`, id)
+	tag, err := a.DB.Exec(r.Context(), `DELETE FROM booking_shifts WHERE id = $1 AND organisation_id = $2`, id, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to remove booking shift")
 		return

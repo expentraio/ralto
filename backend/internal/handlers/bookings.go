@@ -56,7 +56,7 @@ func (a *API) ListBookingsForRequirement(w http.ResponseWriter, r *http.Request)
 	rows, err := a.DB.Query(r.Context(),
 		`SELECT id, job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override,
 		        offered_at, responded_at, confirmed_at, notes
-		 FROM bookings WHERE job_requirement_id = $1 ORDER BY offered_at`, reqID)
+		 FROM bookings WHERE job_requirement_id = $1 AND organisation_id = $2 ORDER BY offered_at`, reqID, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list bookings")
 		return
@@ -109,7 +109,7 @@ func (a *API) CreateBooking(w http.ResponseWriter, r *http.Request) {
 
 	var jobStatus models.JobStatus
 	if err := a.DB.QueryRow(r.Context(),
-		`SELECT j.status FROM job_requirements jr JOIN jobs j ON j.id = jr.job_id WHERE jr.id = $1`, reqID,
+		`SELECT j.status FROM job_requirements jr JOIN jobs j ON j.id = jr.job_id WHERE jr.id = $1 AND jr.organisation_id = $2`, reqID, currentOrgID,
 	).Scan(&jobStatus); errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "job requirement not found")
 		return
@@ -124,10 +124,10 @@ func (a *API) CreateBooking(w http.ResponseWriter, r *http.Request) {
 
 	var b models.Booking
 	err := a.DB.QueryRow(r.Context(),
-		`INSERT INTO bookings (job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override, notes, offered_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+		`INSERT INTO bookings (job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override, notes, offered_at, organisation_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9)
 		 RETURNING id, job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override, offered_at, responded_at, confirmed_at, notes`,
-		reqID, req.PersonID, req.Status, req.StartDate, req.EndDate, req.CallTime, req.RateOverride, req.Notes,
+		reqID, req.PersonID, req.Status, req.StartDate, req.EndDate, req.CallTime, req.RateOverride, req.Notes, currentOrgID,
 	).Scan(&b.ID, &b.JobRequirementID, &b.PersonID, &b.Status, &b.StartDate, &b.EndDate, &b.CallTime,
 		&b.RateOverride, &b.OfferedAt, &b.RespondedAt, &b.ConfirmedAt, &b.Notes)
 	if err != nil {
@@ -155,9 +155,9 @@ func (a *API) PromoteBookingToOffer(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var b models.Booking
 	err := a.DB.QueryRow(r.Context(),
-		`UPDATE bookings SET status = 'offered', offered_at = now() WHERE id = $1 AND status = 'pencilled'
+		`UPDATE bookings SET status = 'offered', offered_at = now() WHERE id = $1 AND status = 'pencilled' AND organisation_id = $2
 		 RETURNING id, job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override, offered_at, responded_at, confirmed_at, notes`,
-		id,
+		id, currentOrgID,
 	).Scan(&b.ID, &b.JobRequirementID, &b.PersonID, &b.Status, &b.StartDate, &b.EndDate, &b.CallTime,
 		&b.RateOverride, &b.OfferedAt, &b.RespondedAt, &b.ConfirmedAt, &b.Notes)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -202,7 +202,7 @@ func (a *API) UpdateBooking(w http.ResponseWriter, r *http.Request) {
 
 	var previousCallTime *string
 	var status models.BookingStatus
-	if err := a.DB.QueryRow(r.Context(), `SELECT call_time, status FROM bookings WHERE id = $1`, id).Scan(&previousCallTime, &status); errors.Is(err, pgx.ErrNoRows) {
+	if err := a.DB.QueryRow(r.Context(), `SELECT call_time, status FROM bookings WHERE id = $1 AND organisation_id = $2`, id, currentOrgID).Scan(&previousCallTime, &status); errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "booking not found")
 		return
 	} else if err != nil {
@@ -213,9 +213,9 @@ func (a *API) UpdateBooking(w http.ResponseWriter, r *http.Request) {
 	var b models.Booking
 	err := a.DB.QueryRow(r.Context(),
 		`UPDATE bookings SET start_date = $1, end_date = $2, call_time = $3, rate_override = $4, notes = $5
-		 WHERE id = $6
+		 WHERE id = $6 AND organisation_id = $7
 		 RETURNING id, job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override, offered_at, responded_at, confirmed_at, notes`,
-		req.StartDate, req.EndDate, req.CallTime, req.RateOverride, req.Notes, id,
+		req.StartDate, req.EndDate, req.CallTime, req.RateOverride, req.Notes, id, currentOrgID,
 	).Scan(&b.ID, &b.JobRequirementID, &b.PersonID, &b.Status, &b.StartDate, &b.EndDate, &b.CallTime,
 		&b.RateOverride, &b.OfferedAt, &b.RespondedAt, &b.ConfirmedAt, &b.Notes)
 	if err != nil {
@@ -239,8 +239,8 @@ func (a *API) UpdateBooking(w http.ResponseWriter, r *http.Request) {
 			// doc's own note) has something to count. Resolved when the
 			// crew member hits Acknowledge — see CrewAcknowledgeBooking.
 			if _, err := a.DB.Exec(r.Context(),
-				`INSERT INTO operational_alerts (job_id, type, related_entity_id, status) VALUES ($1, 'unacknowledged_update', $2, 'open')`,
-				ctx.JobID, b.ID,
+				`INSERT INTO operational_alerts (job_id, type, related_entity_id, status, organisation_id) VALUES ($1, 'unacknowledged_update', $2, 'open', $3)`,
+				ctx.JobID, b.ID, currentOrgID,
 			); err != nil {
 				log.Printf("update booking: raising unacknowledged_update alert: %v", err)
 			}
@@ -256,9 +256,9 @@ func (a *API) ConfirmBooking(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var b models.Booking
 	err := a.DB.QueryRow(r.Context(),
-		`UPDATE bookings SET status = 'confirmed', confirmed_at = now() WHERE id = $1
+		`UPDATE bookings SET status = 'confirmed', confirmed_at = now() WHERE id = $1 AND organisation_id = $2
 		 RETURNING id, job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override, offered_at, responded_at, confirmed_at, notes`,
-		id,
+		id, currentOrgID,
 	).Scan(&b.ID, &b.JobRequirementID, &b.PersonID, &b.Status, &b.StartDate, &b.EndDate, &b.CallTime,
 		&b.RateOverride, &b.OfferedAt, &b.RespondedAt, &b.ConfirmedAt, &b.Notes)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -284,9 +284,9 @@ func (a *API) CancelBooking(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var b models.Booking
 	err := a.DB.QueryRow(r.Context(),
-		`UPDATE bookings SET status = 'cancelled' WHERE id = $1
+		`UPDATE bookings SET status = 'cancelled' WHERE id = $1 AND organisation_id = $2
 		 RETURNING id, job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override, offered_at, responded_at, confirmed_at, notes`,
-		id,
+		id, currentOrgID,
 	).Scan(&b.ID, &b.JobRequirementID, &b.PersonID, &b.Status, &b.StartDate, &b.EndDate, &b.CallTime,
 		&b.RateOverride, &b.OfferedAt, &b.RespondedAt, &b.ConfirmedAt, &b.Notes)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -314,7 +314,7 @@ func (a *API) CancelBooking(w http.ResponseWriter, r *http.Request) {
 // Mirrors Equiptra's history-vs-existence delete guards.
 func (a *API) DeleteBooking(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	tag, err := a.DB.Exec(r.Context(), `DELETE FROM bookings WHERE id = $1 AND status IN ('pencilled', 'offered')`, id)
+	tag, err := a.DB.Exec(r.Context(), `DELETE FROM bookings WHERE id = $1 AND status IN ('pencilled', 'offered') AND organisation_id = $2`, id, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to delete booking")
 		return
