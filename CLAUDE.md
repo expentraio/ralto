@@ -54,3 +54,5 @@ Every migration must be run against **both** the local `ralto` database and the 
 Every table in Supabase has RLS enabled with zero policies. That's deliberate, not a placeholder waiting for policies: nothing in Ralto talks to Postgres through the Supabase client libraries or the anon key, so the `anon`/`authenticated` roles never need access, and RLS-with-no-policies denies them outright. The Go backend connects directly to Postgres as the table owner, and owners bypass RLS regardless of policies, so this costs the app nothing.
 
 **Standing convention: every migration that `CREATE TABLE`s also `ALTER TABLE ... ENABLE ROW LEVEL SECURITY`s it, in the same migration file.** A new table that ships without this line is exposed to the anon key by default — that's the gap to avoid, not a follow-up to schedule. This applies locally too (harmless there: RLS-with-no-policies only blocks non-owner roles, and the local dev connection is the table owner) — one more reason migration files, not manual `ALTER`s run only against Supabase, are the source of truth.
+
+<!-- verifying auto-deploy -->
