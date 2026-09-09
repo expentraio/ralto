@@ -102,6 +102,15 @@ function clientColor(client: Client | undefined, fallbackIndex: number): string 
   return FALLBACK_CLIENT_COLORS[fallbackIndex % FALLBACK_CLIENT_COLORS.length]
 }
 
+// Every date field from the API comes back as a plain "YYYY-MM-DD" string —
+// this is the one place that gets turned into the requested DD/MM/YY
+// display format, so every call site stays consistent by construction
+// rather than by remembering to match the others.
+function formatDate(iso: string): string {
+  const [y, m, d] = iso.split('-')
+  return `${d}/${m}/${y.slice(2)}`
+}
+
 // The three-tag vocabulary from addendum v2 §4 — derived, never stored.
 // Cancelled beats Pencil beats Booked, and the lifecycle enum underneath
 // (Draft..Complete) is untouched by this — it's a second, orthogonal axis.
@@ -441,7 +450,7 @@ function ProspectiveBandRow({ weekDates, events, onSelect }: { weekDates: Date[]
         <div
           key={event.id}
           onClick={() => onSelect(event)}
-          title={`${event.name} (prospective) — ${event.date_start} – ${event.date_end}`}
+          title={`${event.name} (prospective) — ${formatDate(event.date_start)} – ${formatDate(event.date_end)}`}
           style={{
             gridColumn: `${startCol + 1} / ${endCol + 2}`,
             gridRow: lane + 1,
@@ -622,7 +631,7 @@ function ProspectiveEventDetailCard({
           {event.name} <span style={{ fontWeight: 500, fontSize: 11.5, color: 'var(--primary-soft)', fontStyle: 'italic' }}>· Prospective</span>
         </div>
         <div style={{ fontFamily: 'var(--font)', fontSize: 12.5, color: 'var(--ink-muted)', marginTop: 2 }}>
-          {event.date_start} – {event.date_end}
+          {formatDate(event.date_start)} – {formatDate(event.date_end)}
           {client ? ` · ${client.name}` : ''}
         </div>
         {event.notes && <div style={{ fontFamily: 'var(--font)', fontSize: 12.5, color: 'var(--ink-muted)', marginTop: 4 }}>{event.notes}</div>}
@@ -792,9 +801,13 @@ function CalendarContent({
 // Jobs
 // ---------------------------------------------------------------------------
 
+// jobComplete means every requirement is actually confirmed, not just
+// "spoken for" — checked per-requirement rather than off the aggregate
+// confirmed/required sums, since an over-crewed role and an under-crewed
+// role could otherwise cancel out in the totals and still look complete.
 function urgencyFor(summary: JobSummary) {
-  const unfilled = summary.required - summary.confirmed - summary.pencilled - summary.offered
-  if (unfilled <= 0 && summary.required > 0) return { tier: 'complete', color: 'var(--success)', bg: 'var(--success-bg)', Icon: CheckCircle2 }
+  const jobComplete = summary.required > 0 && summary.requirements.every((r) => r.quantity_confirmed >= r.quantity_required)
+  if (jobComplete) return { tier: 'complete', color: 'var(--success)', bg: 'var(--success-bg)', Icon: CheckCircle2 }
   const daysUntilStart = Math.ceil((new Date(summary.job.start_date).getTime() - Date.now()) / DAY_MS)
   if (daysUntilStart <= 5) return { tier: 'critical', color: 'var(--danger)', bg: 'var(--danger-bg)', Icon: AlertTriangle }
   if (daysUntilStart <= 30) return { tier: 'attention', color: 'var(--attention)', bg: 'var(--attention-bg)', Icon: Clock }
@@ -824,7 +837,7 @@ function JobListRow({ summary, client, selected, fallbackIndex, onOpen }: { summ
           </span>
         </div>
         <div style={{ fontFamily: 'var(--font)', fontSize: 12, color: 'var(--ink-muted)', marginTop: 2 }}>
-          {summary.job.start_date} – {summary.job.end_date}
+          {formatDate(summary.job.start_date)} – {formatDate(summary.job.end_date)}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8 }}>
           <div style={{ flex: 1, height: 4, borderRadius: 999, background: 'var(--track)', overflow: 'hidden' }}>
@@ -853,40 +866,50 @@ function InfoRow({ icon: Icon, label, value }: { icon: typeof CalendarDays; labe
   )
 }
 
-function JobRoleRow({ req }: { req: JobRequirementWithCounts }) {
-  const unfilled = req.quantity_required - req.quantity_confirmed - req.quantity_pencilled - req.quantity_offered
-  const pctConfirmed = req.quantity_required > 0 ? (req.quantity_confirmed / req.quantity_required) * 100 : 0
-  const pctPencilled = req.quantity_required > 0 ? (req.quantity_pencilled / req.quantity_required) * 100 : 0
-  const complete = unfilled <= 0
-  const StatusIcon = complete ? CheckCircle2 : req.quantity_offered > 0 ? Clock : AlertTriangle
-  const statusColor = complete ? 'var(--success)' : 'var(--attention)'
-  const statusBg = complete ? 'var(--success-bg)' : 'var(--attention-bg)'
+// Compact role row for the Jobs detail pane — deliberately not the same
+// progress-bar component Planner's RequirementRow renders (that duplication
+// was the actual complaint from office testing): just role name, the tick,
+// and the count. An unfilled role is a link straight into Planner,
+// pre-targeted at this exact requirement — there's nothing to click through
+// to on an already-confirmed role, so those stay plain, non-interactive rows.
+function JobRoleRow({ req, onOpenInPlanner }: { req: JobRequirementWithCounts; onOpenInPlanner: (req: JobRequirementWithCounts) => void }) {
+  const roleComplete = req.quantity_confirmed >= req.quantity_required
+  const StatusIcon = roleComplete ? CheckCircle2 : req.quantity_offered > 0 ? Clock : AlertTriangle
+  const statusColor = roleComplete ? 'var(--success)' : 'var(--attention)'
+  const statusBg = roleComplete ? 'var(--success-bg)' : 'var(--attention-bg)'
+
+  const rowStyle = {
+    border: '1px solid var(--line)',
+    borderRadius: 12,
+    padding: '12px 14px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  } as const
+
+  const inner = (
+    <>
+      <span style={{ fontFamily: 'var(--font)', fontWeight: 600, fontSize: 13.5, color: 'var(--ink)' }}>{req.role_name}</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+        <span style={{ fontFamily: 'var(--font)', fontVariantNumeric: 'tabular-nums', fontSize: 12.5, fontWeight: 600, color: roleComplete ? 'var(--ink-muted)' : 'var(--attention)' }}>
+          {req.quantity_confirmed}/{req.quantity_required}
+        </span>
+        <div style={{ width: 22, height: 22, borderRadius: '50%', background: statusBg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <StatusIcon size={12} color={statusColor} strokeWidth={2.5} />
+        </div>
+      </div>
+    </>
+  )
+
+  if (roleComplete) {
+    return <div style={rowStyle}>{inner}</div>
+  }
+
   return (
-    <div style={{ border: '1px solid var(--line)', borderRadius: 12, padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
-      <div style={{ flex: 1 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span style={{ fontFamily: 'var(--font)', fontWeight: 600, fontSize: 13.5, color: 'var(--ink)' }}>{req.role_name}</span>
-          <span style={{ fontFamily: 'var(--font)', fontVariantNumeric: 'tabular-nums', fontSize: 12.5, fontWeight: 600, color: unfilled > 0 ? 'var(--attention)' : 'var(--ink-muted)' }}>
-            {req.quantity_confirmed}/{req.quantity_required}
-          </span>
-        </div>
-        <div style={{ height: 5, borderRadius: 999, background: 'var(--track)', overflow: 'hidden', marginTop: 7, display: 'flex' }}>
-          <div style={{ width: `${pctConfirmed}%`, background: unfilled > 0 ? 'var(--attention)' : 'var(--success)' }} />
-          <div
-            style={{
-              width: `${pctPencilled}%`,
-              background: `repeating-linear-gradient(135deg, var(--primary-soft), var(--primary-soft) 2px, transparent 2px, transparent 4px)`,
-            }}
-          />
-        </div>
-        {req.quantity_pencilled > 0 && (
-          <div style={{ fontFamily: 'var(--font)', fontSize: 11, color: 'var(--primary-soft)', marginTop: 4 }}>{req.quantity_pencilled} pencilled</div>
-        )}
-      </div>
-      <div style={{ flexShrink: 0, width: 22, height: 22, borderRadius: '50%', background: statusBg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <StatusIcon size={12} color={statusColor} strokeWidth={2.5} />
-      </div>
-    </div>
+    <button onClick={() => onOpenInPlanner(req)} style={{ ...rowStyle, width: '100%', textAlign: 'left', background: '#fff', cursor: 'pointer', font: 'inherit' }}>
+      {inner}
+    </button>
   )
 }
 
@@ -1271,6 +1294,7 @@ function JobsContent({
   reloadSummaries,
   prefill,
   onConsumedPrefill,
+  onOpenRoleInPlanner,
 }: {
   summaries: JobSummary[]
   clients: Record<string, Client>
@@ -1283,6 +1307,7 @@ function JobsContent({
   reloadSummaries: () => void
   prefill?: JobCreatePrefill
   onConsumedPrefill: () => void
+  onOpenRoleInPlanner: (jobId: string, reqId: string) => void
 }) {
   const [query, setQuery] = useState('')
   const [contacts, setContacts] = useState<JobContact[]>([])
@@ -1374,7 +1399,7 @@ function JobsContent({
         </div>
 
         <div style={{ display: 'flex', gap: 32, marginTop: 8, borderBottom: '1px solid var(--line)', paddingBottom: 4 }}>
-          <InfoRow icon={CalendarDays} label="Dates" value={`${selected.job.start_date} – ${selected.job.end_date}`} />
+          <InfoRow icon={CalendarDays} label="Dates" value={`${formatDate(selected.job.start_date)} – ${formatDate(selected.job.end_date)}`} />
           <InfoRow icon={MapPin} label="Venue" value={venueName ?? 'Not set'} />
           <InfoRow icon={Phone} label="Production contact" value={primaryContact ? `${primaryContact.name}${primaryContact.phone ? ' · ' + primaryContact.phone : ''}` : 'Not yet assigned'} />
         </div>
@@ -1387,7 +1412,7 @@ function JobsContent({
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           {selected.requirements.map((r) => (
-            <JobRoleRow key={r.id} req={r} />
+            <JobRoleRow key={r.id} req={r} onOpenInPlanner={(req) => onOpenRoleInPlanner(req.job_id, req.id)} />
           ))}
           {selected.requirements.length === 0 && <div style={{ fontFamily: 'var(--font)', fontSize: 13, color: 'var(--ink-muted)' }}>No role requirements added yet.</div>}
         </div>
@@ -1427,14 +1452,19 @@ function JobChip({ summary, client, fallbackIndex, active, onClick }: { summary:
 }
 
 function RequirementRow({ req, active, onOpen }: { req: JobRequirementWithCounts; active: boolean; onOpen: (req: JobRequirementWithCounts) => void }) {
-  const unfilled = req.quantity_required - req.quantity_confirmed - req.quantity_pencilled - req.quantity_offered
+  // stillNeeded (how many more to find) and roleComplete (does the tick
+  // show) are deliberately separate: offered/pencilled people are spoken
+  // for and correctly stop counting as "still needed," but a tick means
+  // confirmed, not asked — offering the last open slot shouldn't turn it
+  // green before they've replied.
+  const stillNeeded = req.quantity_required - req.quantity_confirmed - req.quantity_pencilled - req.quantity_offered
+  const roleComplete = req.quantity_confirmed >= req.quantity_required
   const pctConfirmed = req.quantity_required > 0 ? (req.quantity_confirmed / req.quantity_required) * 100 : 0
   const pctPencilled = req.quantity_required > 0 ? (req.quantity_pencilled / req.quantity_required) * 100 : 0
   const pctOffered = req.quantity_required > 0 ? (req.quantity_offered / req.quantity_required) * 100 : 0
-  const complete = unfilled <= 0
-  const StatusIcon = complete ? CheckCircle2 : req.quantity_offered > 0 ? Clock : AlertTriangle
-  const statusColor = complete ? 'var(--success)' : 'var(--attention)'
-  const statusBg = complete ? 'var(--success-bg)' : 'var(--attention-bg)'
+  const StatusIcon = roleComplete ? CheckCircle2 : req.quantity_offered > 0 ? Clock : AlertTriangle
+  const statusColor = roleComplete ? 'var(--success)' : 'var(--attention)'
+  const statusBg = roleComplete ? 'var(--success-bg)' : 'var(--attention-bg)'
 
   return (
     <button
@@ -1444,7 +1474,7 @@ function RequirementRow({ req, active, onOpen }: { req: JobRequirementWithCounts
       <div style={{ flex: 1 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
           <span style={{ fontFamily: 'var(--font)', fontWeight: 600, fontSize: 14.5, color: 'var(--ink)' }}>{req.role_name}</span>
-          <span style={{ fontFamily: 'var(--font)', fontVariantNumeric: 'tabular-nums', fontSize: 12.5, color: unfilled > 0 ? 'var(--attention)' : 'var(--ink-muted)', fontWeight: 600 }}>
+          <span style={{ fontFamily: 'var(--font)', fontVariantNumeric: 'tabular-nums', fontSize: 12.5, color: stillNeeded > 0 ? 'var(--attention)' : 'var(--ink-muted)', fontWeight: 600 }}>
             {req.quantity_confirmed}/{req.quantity_required}
           </span>
         </div>
@@ -1461,9 +1491,9 @@ function RequirementRow({ req, active, onOpen }: { req: JobRequirementWithCounts
           />
           <div style={{ width: `${pctOffered}%`, background: 'var(--attention)' }} />
         </div>
-        {(unfilled > 0 || req.quantity_pencilled > 0) && (
+        {(stillNeeded > 0 || req.quantity_pencilled > 0) && (
           <div style={{ fontFamily: 'var(--font)', fontSize: 12, color: 'var(--attention)', marginTop: 6 }}>
-            {unfilled > 0 ? `${unfilled} unfilled` : 'Fully held'}
+            {stillNeeded > 0 ? `${stillNeeded} unfilled` : 'Fully held'}
             {req.quantity_pencilled > 0 ? ` · ${req.quantity_pencilled} pencilled` : ''}
             {req.quantity_offered > 0 ? ` · ${req.quantity_offered} offered` : ''}
           </div>
@@ -1508,14 +1538,51 @@ function CandidateGroup({ title, tone, children }: { title: string; tone: string
   )
 }
 
-function PlannerContent({ summaries, clients, selectedJobId, onSelectJob, reloadSummaries }: { summaries: JobSummary[]; clients: Record<string, Client>; selectedJobId: string | undefined; onSelectJob: (id: string) => void; reloadSummaries: () => void }) {
+function PlannerContent({
+  summaries,
+  clients,
+  selectedJobId,
+  onSelectJob,
+  reloadSummaries,
+  targetReqId,
+  onConsumedTarget,
+}: {
+  summaries: JobSummary[]
+  clients: Record<string, Client>
+  selectedJobId: string | undefined
+  onSelectJob: (id: string) => void
+  reloadSummaries: () => void
+  targetReqId?: string
+  onConsumedTarget?: () => void
+}) {
   const summary = summaries.find((s) => s.job.id === selectedJobId) ?? summaries[0]
   const [activeReq, setActiveReq] = useState<JobRequirementWithCounts | undefined>(undefined)
 
+  // Picks the default (first unfulfilled requirement) whenever the
+  // selected job changes. Deliberately keyed only on the job, not on
+  // targetReqId — see the second effect below for why that separation
+  // matters.
   useEffect(() => {
     if (!summary) return
     setActiveReq(summary.requirements.find((r) => r.quantity_required - r.quantity_confirmed - r.quantity_pencilled - r.quantity_offered > 0) ?? summary.requirements[0])
   }, [summary?.job.id, summary?.requirements])
+
+  // targetReqId is a one-shot override for the initial selection only —
+  // same pattern as jobPrefill/onConsumedPrefill elsewhere in this file.
+  // Consuming it (clearing plannerTargetReqId in the parent) causes
+  // *another* render of this component with targetReqId now undefined —
+  // if that render re-ran the same "pick a default" logic, it would
+  // immediately stomp the target it had just applied. Keeping this as its
+  // own effect with an early return when there's no target means that
+  // follow-up render is a no-op here instead, and the effect above (keyed
+  // only on the job) is what handles picking a default when the job
+  // actually changes afterward.
+  useEffect(() => {
+    if (!targetReqId || !summary) return
+    const target = summary.requirements.find((r) => r.id === targetReqId)
+    if (target) setActiveReq(target)
+    onConsumedTarget?.()
+  }, [targetReqId, summary])
 
   const { data: pool, reload: reloadCandidates } = useCandidates(activeReq?.id)
 
@@ -1660,7 +1727,24 @@ function getMonthDates(refDate: Date): Date[] {
   return Array.from({ length: daysInMonth }, (_, i) => new Date(year, month, i + 1))
 }
 
+type TeamMode = 'month' | 'week' | 'fortnight'
+
+// Week/Fortnight reuse the same startOfWeek/addDays helpers CalendarContent
+// already uses for its own month/week switcher — fortnight is just that
+// idea extended to 14 days instead of 7.
+function getTeamDates(mode: TeamMode, refDate: Date): Date[] {
+  if (mode === 'month') return getMonthDates(refDate)
+  const start = startOfWeek(refDate)
+  const days = mode === 'week' ? 7 : 14
+  return Array.from({ length: days }, (_, i) => addDays(start, i))
+}
+
+// Month's whole purpose is the wide overview — 30px columns, hover-only
+// detail is the correct trade-off there and stays untouched. Week/Fortnight
+// trade overview width for enough room to show a short job name or leave
+// reason inline, without truncating to nothing.
 const DAY_COL_WIDTH = 30
+const WIDE_DAY_COL_WIDTH = 100
 const NAME_COL_WIDTH = 168
 
 // Terminal Booking statuses (Declined/Cancelled) don't occupy a day on the
@@ -1691,7 +1775,7 @@ function bookingCellStyle(booking: ResourceCalendarBooking): { background: strin
 // Availability row is rendered as BOTH, flagged — never one picked over
 // the other, since that overlap is exactly the exception this view exists
 // to catch.
-function ResourceCalendarCell({ row, date, onOpenJob }: { row: ResourceCalendarRow; date: Date; onOpenJob: (id: string) => void }) {
+function ResourceCalendarCell({ row, date, mode, onOpenJob }: { row: ResourceCalendarRow; date: Date; mode: TeamMode; onOpenJob: (id: string) => void }) {
   const iso = dateISO(date)
   const bookings = row.bookings.filter((b) => ACTIVE_BOOKING_STATUSES.has(b.status) && b.start_date <= iso && b.end_date >= iso)
   const booking = bookings[0]
@@ -1712,6 +1796,15 @@ function ResourceCalendarCell({ row, date, onOpenJob }: { row: ResourceCalendarR
         ? 'Tentative'
         : undefined
 
+  // Additive, not a replacement: the tooltip above already carries more
+  // detail (role name, status) than fits inline even in Fortnight mode, so
+  // it stays in all three modes regardless of what's shown inline. Month
+  // keeps zero inline text — its 30px columns are the wide-overview trade-off,
+  // unchanged from today.
+  const showInline = mode !== 'month'
+  const inlineText = !showInline ? undefined : booking ? booking.job_name : unavailable ? (unavailable.type ? AVAILABILITY_TYPE_LABEL[unavailable.type] : 'Unavailable') : undefined
+  const inlineColor = booking ? '#fff' : 'var(--danger)'
+
   return (
     <div
       title={title}
@@ -1726,8 +1819,28 @@ function ResourceCalendarCell({ row, date, onOpenJob }: { row: ResourceCalendarR
         opacity: style?.opacity,
         border: !booking && unavailable ? '1px solid var(--danger)' : !booking && tentative ? '1px solid var(--attention)' : undefined,
         boxSizing: 'border-box',
+        display: inlineText ? 'flex' : undefined,
+        alignItems: inlineText ? 'center' : undefined,
+        padding: inlineText ? '0 6px' : undefined,
       }}
     >
+      {inlineText && (
+        <span
+          style={{
+            fontFamily: 'var(--font)',
+            fontWeight: 600,
+            fontSize: 10,
+            color: inlineColor,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            minWidth: 0,
+            flex: '1 1 auto',
+          }}
+        >
+          {inlineText}
+        </span>
+      )}
       {conflict && (
         <span style={{ position: 'absolute', top: -4, right: -4, width: 13, height: 13, borderRadius: '50%', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 0 1px var(--line)' }}>
           <AlertOctagon size={9} color="var(--danger)" />
@@ -1755,20 +1868,37 @@ function ResourceCalendarContent({
   onOpenJob: (id: string) => void
   onConvertEvent: (event: ProspectiveEvent) => void
 }) {
+  const [mode, setMode] = useState<TeamMode>('month')
   const [refDate, setRefDate] = useState(new Date())
   const [includeIds, setIncludeIds] = useState<string[]>([])
   const [search, setSearch] = useState('')
 
-  const dates = useMemo(() => getMonthDates(refDate), [refDate])
+  const dates = useMemo(() => getTeamDates(mode, refDate), [mode, refDate])
+  const colWidth = mode === 'month' ? DAY_COL_WIDTH : WIDE_DAY_COL_WIDTH
   const startDate = dateISO(dates[0])
   const endDate = dateISO(dates[dates.length - 1])
 
   const { data, loading } = useResourceCalendar(startDate, endDate, includeIds)
   const today = new Date()
 
-  const goPrev = () => setRefDate((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1))
-  const goNext = () => setRefDate((d) => new Date(d.getFullYear(), d.getMonth() + 1, 1))
+  const goPrev = () => {
+    if (mode === 'month') return setRefDate((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1))
+    setRefDate((d) => addDays(d, mode === 'week' ? -7 : -14))
+  }
+  const goNext = () => {
+    if (mode === 'month') return setRefDate((d) => new Date(d.getFullYear(), d.getMonth() + 1, 1))
+    setRefDate((d) => addDays(d, mode === 'week' ? 7 : 14))
+  }
   const goToday = () => setRefDate(new Date())
+
+  const headerLabel =
+    mode === 'month'
+      ? `${MONTH_LABELS[refDate.getMonth()]} ${refDate.getFullYear()}`
+      : (() => {
+          const s = dates[0]
+          const e = dates[dates.length - 1]
+          return `${s.getDate()} – ${e.getDate()} ${MONTH_LABELS[e.getMonth()]} ${e.getFullYear()}`
+        })()
 
   // Explicitly-added rows are session state only, never persisted — see
   // addendum v2 §1's "no pinning is persisted in v1."
@@ -1827,17 +1957,26 @@ function ResourceCalendarContent({
         <button onClick={goNext} style={{ width: 30, height: 30, borderRadius: 8, border: '1px solid var(--line)', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
           <ChevronRight size={15} color="var(--ink-muted)" />
         </button>
-        <div style={{ fontFamily: 'var(--font)', fontWeight: 600, fontSize: 15, color: 'var(--ink)' }}>
-          {MONTH_LABELS[refDate.getMonth()]} {refDate.getFullYear()}
-        </div>
+        <div style={{ fontFamily: 'var(--font)', fontWeight: 600, fontSize: 15, color: 'var(--ink)' }}>{headerLabel}</div>
         <button onClick={goToday} style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: 8, padding: '6px 14px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12.5, color: 'var(--ink)', cursor: 'pointer' }}>
           Today
         </button>
+        <div style={{ display: 'flex', background: '#fff', border: '1px solid var(--line)', borderRadius: 10, padding: 3, marginLeft: 4 }}>
+          {(['month', 'week', 'fortnight'] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => setMode(m)}
+              style={{ background: mode === m ? 'var(--primary-tint)' : 'none', color: mode === m ? 'var(--primary)' : 'var(--ink-muted)', border: 'none', borderRadius: 7, padding: '6px 14px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12.5, cursor: 'pointer', textTransform: 'capitalize' }}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
         {loading && <span style={{ fontFamily: 'var(--font)', fontSize: 11.5, color: 'var(--ink-muted)' }}>Loading…</span>}
       </div>
 
       <div style={{ flex: 1, minHeight: 0, overflow: 'auto', border: '1px solid var(--line)', borderRadius: 12, background: '#fff' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: `${NAME_COL_WIDTH}px repeat(${dates.length}, ${DAY_COL_WIDTH}px)`, width: 'max-content' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: `${NAME_COL_WIDTH}px repeat(${dates.length}, ${colWidth}px)`, width: 'max-content' }}>
           <div style={{ position: 'sticky', top: 0, left: 0, zIndex: 4, background: 'var(--surface)', borderBottom: '1px solid var(--line)', borderRight: '1px solid var(--line)' }} />
           {dates.map((date) => {
             const iso = dateISO(date)
@@ -1907,7 +2046,7 @@ function ResourceCalendarContent({
                 const inEvent = events.find((e) => e.date_start <= iso && e.date_end >= iso)
                 return (
                   <div key={iso} style={{ borderBottom: '1px solid var(--line)', borderRight: '1px solid #F0EFEA', background: inEvent ? 'var(--primary-tint)' : undefined }}>
-                    <ResourceCalendarCell row={row} date={date} onOpenJob={onOpenJob} />
+                    <ResourceCalendarCell row={row} date={date} mode={mode} onOpenJob={onOpenJob} />
                   </div>
                 )
               })}
@@ -2021,7 +2160,7 @@ function AvailabilityRow({ entry, onDelete }: { entry: Availability; onDelete: (
       </span>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontFamily: 'var(--font)', fontSize: 13.5, color: 'var(--ink)' }}>
-          {entry.start_date} – {entry.end_date}
+          {formatDate(entry.start_date)} – {formatDate(entry.end_date)}
           {entry.type && <span style={{ color: 'var(--ink-muted)' }}> · {AVAILABILITY_TYPE_LABEL[entry.type]}</span>}
         </div>
         {entry.notes && <div style={{ fontFamily: 'var(--font)', fontSize: 12, color: 'var(--ink-muted)', marginTop: 2 }}>{entry.notes}</div>}
@@ -2338,6 +2477,7 @@ export function RaltoDesktopApp() {
   const [inSuite, setInSuite] = useState(false)
   const [selectedJobId, setSelectedJobId] = useState<string | undefined>(undefined)
   const [selectedPlannerJobId, setSelectedPlannerJobId] = useState<string | undefined>(undefined)
+  const [plannerTargetReqId, setPlannerTargetReqId] = useState<string | undefined>(undefined)
   const [jobPrefill, setJobPrefill] = useState<JobCreatePrefill | undefined>(undefined)
 
   const { summaries, reload: reloadSummaries } = useJobSummaries()
@@ -2353,6 +2493,16 @@ export function RaltoDesktopApp() {
 
   const openJobFromCalendar = (jobId: string) => {
     setSelectedPlannerJobId(jobId)
+    setActive('planner')
+  }
+
+  // Same handoff shape as openJobFromCalendar, extended to carry the
+  // specific unfilled requirement a Jobs-screen role row was clicked for —
+  // so Planner opens with that exact role selected, not just the job's
+  // first unfulfilled one.
+  const openRoleInPlanner = (jobId: string, reqId: string) => {
+    setSelectedPlannerJobId(jobId)
+    setPlannerTargetReqId(reqId)
     setActive('planner')
   }
 
@@ -2423,9 +2573,20 @@ export function RaltoDesktopApp() {
                 reloadSummaries={reloadSummaries}
                 prefill={jobPrefill}
                 onConsumedPrefill={() => setJobPrefill(undefined)}
+                onOpenRoleInPlanner={openRoleInPlanner}
               />
             )}
-            {active === 'planner' && <PlannerContent summaries={summaries} clients={clients} selectedJobId={selectedPlannerJobId} onSelectJob={setSelectedPlannerJobId} reloadSummaries={reloadSummaries} />}
+            {active === 'planner' && (
+              <PlannerContent
+                summaries={summaries}
+                clients={clients}
+                selectedJobId={selectedPlannerJobId}
+                onSelectJob={setSelectedPlannerJobId}
+                reloadSummaries={reloadSummaries}
+                targetReqId={plannerTargetReqId}
+                onConsumedTarget={() => setPlannerTargetReqId(undefined)}
+              />
+            )}
             {active === 'crew' && <CrewContent people={people} />}
           </>
         )}
