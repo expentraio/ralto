@@ -80,11 +80,26 @@ func (a *API) UpdateRole(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, role)
 }
 
+// DeleteRole is blocked if the role is referenced by any person's
+// capabilities or any job's requirements — mirrors DeletePerson's own
+// booking-history guard: refuse with a clear reason rather than surfacing
+// the FK constraint violation the DB would otherwise raise.
 func (a *API) DeleteRole(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	var inUse bool
+	if err := a.DB.QueryRow(r.Context(),
+		`SELECT EXISTS (SELECT 1 FROM person_roles WHERE role_id = $1) OR EXISTS (SELECT 1 FROM job_requirements WHERE role_id = $1)`, id,
+	).Scan(&inUse); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete role")
+		return
+	}
+	if inUse {
+		writeError(w, http.StatusConflict, "role is still assigned to people or used on job requirements — remove those first")
+		return
+	}
 	tag, err := a.DB.Exec(r.Context(), `DELETE FROM roles WHERE id = $1 AND organisation_id = $2`, id, currentOrgID)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "failed to delete role (it may still be referenced by people or job requirements)")
+		writeError(w, http.StatusBadRequest, "failed to delete role")
 		return
 	}
 	if tag.RowsAffected() == 0 {

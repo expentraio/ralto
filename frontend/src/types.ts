@@ -82,6 +82,22 @@ export interface Role {
   category?: string
 }
 
+export interface OvertimeRule {
+  id: string
+  name: string
+  threshold_hours: number
+  multiplier: number
+}
+
+export type SkillType = 'skill' | 'certification' | 'visa' | 'credential'
+
+export interface Skill {
+  id: string
+  name: string
+  type: SkillType
+  expiry_tracked: boolean
+}
+
 // Ralto's own Project (addendum v1 §1) — groups multiple Jobs under one
 // umbrella (a multi-day tournament, a season of fixtures). Distinct from
 // the future suite-core Project shared_project_id will eventually point

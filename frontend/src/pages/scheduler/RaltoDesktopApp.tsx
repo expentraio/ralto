@@ -63,6 +63,17 @@ import {
   addPersonRole,
   removePersonRole,
   invitePerson,
+  useOvertimeRules,
+  createOvertimeRule,
+  updateOvertimeRule,
+  deleteOvertimeRule,
+  useSkills,
+  createSkill,
+  updateSkill,
+  deleteSkill,
+  createRole,
+  updateRole,
+  deleteRole,
   type JobSummary,
   type PersonWriteInput,
 } from '../../lib/hooks'
@@ -78,6 +89,7 @@ import type {
   JobContact,
   JobRequirementWithCounts,
   OperationalAlert,
+  OvertimeRule,
   Person,
   PersonRole,
   PreferredStatus,
@@ -86,6 +98,8 @@ import type {
   ResourceCalendarBooking,
   ResourceCalendarRow,
   Role,
+  Skill,
+  SkillType,
   Venue,
 } from '../../types'
 
@@ -107,7 +121,7 @@ const NAV_ITEMS = [
   { key: 'crew', label: 'Crew', icon: Users },
 ] as const
 
-type NavKey = (typeof NAV_ITEMS)[number]['key']
+type NavKey = (typeof NAV_ITEMS)[number]['key'] | 'settings'
 
 const FALLBACK_CLIENT_COLORS = ['#453E96', '#F4511E', '#1B3A8C', '#006C35', '#E10600', '#005C30']
 
@@ -205,10 +219,27 @@ function Sidebar({ active, onSelect, onOpenSuite }: { active: NavKey; onSelect: 
         <LogOut size={16} />
         Sign out
       </button>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', borderRadius: 8, color: 'var(--ink-muted)', fontFamily: 'var(--font)', fontWeight: 500, fontSize: 13.5 }}>
+      <button
+        onClick={() => onSelect('settings')}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: '9px 10px',
+          borderRadius: 8,
+          border: 'none',
+          background: active === 'settings' ? 'var(--primary-tint)' : 'transparent',
+          color: active === 'settings' ? 'var(--primary)' : 'var(--ink-muted)',
+          fontFamily: 'var(--font)',
+          fontWeight: active === 'settings' ? 600 : 500,
+          fontSize: 13.5,
+          cursor: 'pointer',
+          textAlign: 'left',
+        }}
+      >
         <Settings size={16} />
         Settings
-      </div>
+      </button>
     </div>
   )
 }
@@ -2881,6 +2912,456 @@ function CrewContent({ people, roles, reloadPeople }: { people: Person[]; roles:
 }
 
 // ---------------------------------------------------------------------------
+// Settings — Roles, Overtime rules, Skills: the three reference tables
+// schedulers curate directly (ralto_settings_spec_v0_2.md §3). Reference
+// data, not an operational workflow — each section is just a list plus
+// inline create/edit and delete-with-guard, nothing more elaborate.
+// ---------------------------------------------------------------------------
+
+const settingsInputStyle = { border: '1px solid var(--line)', borderRadius: 8, padding: '8px 10px', fontFamily: 'var(--font)', fontSize: 13, color: 'var(--ink)', background: '#fff', width: '100%', boxSizing: 'border-box' as const }
+const settingsLabelStyle = { display: 'flex', flexDirection: 'column' as const, gap: 4, fontFamily: 'var(--font)', fontSize: 11.5, color: 'var(--ink-muted)' }
+const settingsRowStyle = { display: 'flex', alignItems: 'center', gap: 10, border: '1px solid var(--line)', borderRadius: 10, padding: '10px 14px', background: '#fff' }
+const settingsIconButtonStyle = { border: 'none', background: 'none', cursor: 'pointer', padding: 4, color: 'var(--ink-muted)', display: 'flex' }
+const settingsCancelButtonStyle = { border: '1px solid var(--line)', background: '#fff', borderRadius: 8, padding: '7px 14px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12.5, cursor: 'pointer', color: 'var(--ink-muted)' }
+const settingsPrimaryButtonStyle = { border: 'none', background: 'var(--primary)', color: '#fff', borderRadius: 8, padding: '7px 14px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12.5, cursor: 'pointer' }
+const settingsAddButtonStyle = { display: 'flex', alignItems: 'center', gap: 5, border: 'none', background: 'var(--primary)', color: '#fff', borderRadius: 8, padding: '7px 14px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12.5, cursor: 'pointer' }
+
+// Shared per-section delete flow: a click arms an inline confirm rather than
+// deleting immediately, and a 409 from the guard (role/rule/skill still
+// referenced) surfaces as a message under that row rather than a raw error —
+// same graceful pattern as Crew's delete-with-booking-history handling.
+function useDeleteWithGuard(deleteFn: (id: string) => Promise<unknown>, reload: () => void) {
+  const [pendingId, setPendingId] = useState<string | undefined>(undefined)
+  const [blocked, setBlocked] = useState<{ id: string; message: string } | undefined>(undefined)
+
+  async function confirmDelete(id: string) {
+    setBlocked(undefined)
+    try {
+      await deleteFn(id)
+      reload()
+    } catch (err) {
+      setBlocked({ id, message: err instanceof ApiError ? err.message : 'Could not delete — try again.' })
+    } finally {
+      setPendingId(undefined)
+    }
+  }
+
+  return { pendingId, setPendingId, blocked, confirmDelete }
+}
+
+function RoleForm({ role, onCancel, onSaved }: { role?: Role; onCancel: () => void; onSaved: () => void }) {
+  const [name, setName] = useState(role?.name ?? '')
+  const [category, setCategory] = useState(role?.category ?? '')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | undefined>(undefined)
+
+  async function submit() {
+    if (!name.trim()) {
+      setError('Name is required.')
+      return
+    }
+    setSaving(true)
+    setError(undefined)
+    try {
+      const payload = { name, category: category || undefined }
+      if (role) await updateRole(role.id, payload)
+      else await createRole(payload)
+      onSaved()
+    } catch {
+      setError('Could not save that role.')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{ ...settingsRowStyle, flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
+      <div style={{ display: 'flex', gap: 10 }}>
+        <label style={{ ...settingsLabelStyle, flex: 1 }}>
+          Name
+          <input value={name} onChange={(e) => setName(e.target.value)} style={settingsInputStyle} />
+        </label>
+        <label style={{ ...settingsLabelStyle, flex: 1 }}>
+          Category (optional)
+          <input value={category} onChange={(e) => setCategory(e.target.value)} style={settingsInputStyle} />
+        </label>
+      </div>
+      {error && <div style={{ fontFamily: 'var(--font)', fontSize: 12, color: 'var(--danger)' }}>{error}</div>}
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <button onClick={onCancel} style={settingsCancelButtonStyle}>
+          Cancel
+        </button>
+        <button onClick={submit} disabled={saving} style={{ ...settingsPrimaryButtonStyle, opacity: saving ? 0.7 : 1 }}>
+          {saving ? 'Saving…' : role ? 'Save' : 'Add role'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function RolesSection({ roles, reload }: { roles: Role[]; reload: () => void }) {
+  const [creating, setCreating] = useState(false)
+  const [editingId, setEditingId] = useState<string | undefined>(undefined)
+  const { pendingId, setPendingId, blocked, confirmDelete } = useDeleteWithGuard(deleteRole, reload)
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <span style={{ fontFamily: 'var(--font)', fontWeight: 600, fontSize: 14, color: 'var(--ink-muted)' }}>Roles</span>
+        {!creating && (
+          <button onClick={() => setCreating(true)} style={settingsAddButtonStyle}>
+            <Plus size={13} /> Add role
+          </button>
+        )}
+      </div>
+      {creating && (
+        <div style={{ marginBottom: 10 }}>
+          <RoleForm onCancel={() => setCreating(false)} onSaved={() => { setCreating(false); reload() }} />
+        </div>
+      )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {roles.map((role) =>
+          editingId === role.id ? (
+            <RoleForm key={role.id} role={role} onCancel={() => setEditingId(undefined)} onSaved={() => { setEditingId(undefined); reload() }} />
+          ) : (
+            <div key={role.id}>
+              <div style={settingsRowStyle}>
+                <div style={{ flex: 1, fontFamily: 'var(--font)', fontSize: 13.5, color: 'var(--ink)' }}>
+                  <span style={{ fontWeight: 600 }}>{role.name}</span>
+                  {role.category && <span style={{ color: 'var(--ink-muted)' }}> · {role.category}</span>}
+                </div>
+                {pendingId === role.id ? (
+                  <>
+                    <span style={{ fontFamily: 'var(--font)', fontSize: 12, color: 'var(--ink-muted)' }}>Delete this role?</span>
+                    <button onClick={() => setPendingId(undefined)} style={{ ...settingsCancelButtonStyle, padding: '5px 10px' }}>
+                      Cancel
+                    </button>
+                    <button onClick={() => confirmDelete(role.id)} style={{ ...settingsPrimaryButtonStyle, background: 'var(--danger)', padding: '5px 10px' }}>
+                      Confirm
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button onClick={() => setEditingId(role.id)} title="Edit role" style={settingsIconButtonStyle}>
+                      <Pencil size={14} />
+                    </button>
+                    <button onClick={() => setPendingId(role.id)} title="Delete role" style={settingsIconButtonStyle}>
+                      <Trash2 size={14} />
+                    </button>
+                  </>
+                )}
+              </div>
+              {blocked?.id === role.id && <div style={{ fontFamily: 'var(--font)', fontSize: 12, color: 'var(--danger)', marginTop: 4 }}>{blocked.message}</div>}
+            </div>
+          ),
+        )}
+        {roles.length === 0 && !creating && <div style={{ fontFamily: 'var(--font)', fontSize: 13, color: 'var(--ink-muted)' }}>No roles yet.</div>}
+      </div>
+    </div>
+  )
+}
+
+function OvertimeRuleForm({ rule, onCancel, onSaved }: { rule?: OvertimeRule; onCancel: () => void; onSaved: () => void }) {
+  const [name, setName] = useState(rule?.name ?? '')
+  const [thresholdHours, setThresholdHours] = useState(rule ? String(rule.threshold_hours) : '')
+  const [multiplier, setMultiplier] = useState(rule ? String(rule.multiplier) : '')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | undefined>(undefined)
+
+  async function submit() {
+    if (!name.trim() || !thresholdHours || !multiplier) {
+      setError('Name, threshold, and multiplier are all required.')
+      return
+    }
+    setSaving(true)
+    setError(undefined)
+    try {
+      const payload = { name, threshold_hours: Number(thresholdHours), multiplier: Number(multiplier) }
+      if (rule) await updateOvertimeRule(rule.id, payload)
+      else await createOvertimeRule(payload)
+      onSaved()
+    } catch {
+      setError('Could not save that overtime rule.')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{ ...settingsRowStyle, flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
+      <div style={{ display: 'flex', gap: 10 }}>
+        <label style={{ ...settingsLabelStyle, flex: 1.4 }}>
+          Name
+          <input value={name} onChange={(e) => setName(e.target.value)} style={settingsInputStyle} />
+        </label>
+        <label style={{ ...settingsLabelStyle, flex: 1 }}>
+          Threshold (hours)
+          <input type="number" min={0} step="0.5" value={thresholdHours} onChange={(e) => setThresholdHours(e.target.value)} style={settingsInputStyle} />
+        </label>
+        <label style={{ ...settingsLabelStyle, flex: 1 }}>
+          Multiplier
+          <input type="number" min={1} step="0.1" value={multiplier} onChange={(e) => setMultiplier(e.target.value)} style={settingsInputStyle} />
+        </label>
+      </div>
+      {error && <div style={{ fontFamily: 'var(--font)', fontSize: 12, color: 'var(--danger)' }}>{error}</div>}
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <button onClick={onCancel} style={settingsCancelButtonStyle}>
+          Cancel
+        </button>
+        <button onClick={submit} disabled={saving} style={{ ...settingsPrimaryButtonStyle, opacity: saving ? 0.7 : 1 }}>
+          {saving ? 'Saving…' : rule ? 'Save' : 'Add rule'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function OvertimeRulesSection({ rules, reload }: { rules: OvertimeRule[]; reload: () => void }) {
+  const [creating, setCreating] = useState(false)
+  const [editingId, setEditingId] = useState<string | undefined>(undefined)
+  const { pendingId, setPendingId, blocked, confirmDelete } = useDeleteWithGuard(deleteOvertimeRule, reload)
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <span style={{ fontFamily: 'var(--font)', fontWeight: 600, fontSize: 14, color: 'var(--ink-muted)' }}>Overtime rules</span>
+        {!creating && (
+          <button onClick={() => setCreating(true)} style={settingsAddButtonStyle}>
+            <Plus size={13} /> Add rule
+          </button>
+        )}
+      </div>
+      {creating && (
+        <div style={{ marginBottom: 10 }}>
+          <OvertimeRuleForm onCancel={() => setCreating(false)} onSaved={() => { setCreating(false); reload() }} />
+        </div>
+      )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {rules.map((rule) =>
+          editingId === rule.id ? (
+            <OvertimeRuleForm key={rule.id} rule={rule} onCancel={() => setEditingId(undefined)} onSaved={() => { setEditingId(undefined); reload() }} />
+          ) : (
+            <div key={rule.id}>
+              <div style={settingsRowStyle}>
+                <div style={{ flex: 1, fontFamily: 'var(--font)', fontSize: 13.5, color: 'var(--ink)' }}>
+                  <span style={{ fontWeight: 600 }}>{rule.name}</span>
+                  <span style={{ color: 'var(--ink-muted)' }}>
+                    {' '}
+                    · {rule.threshold_hours}h threshold · ×{rule.multiplier}
+                  </span>
+                </div>
+                {pendingId === rule.id ? (
+                  <>
+                    <span style={{ fontFamily: 'var(--font)', fontSize: 12, color: 'var(--ink-muted)' }}>Delete this rule?</span>
+                    <button onClick={() => setPendingId(undefined)} style={{ ...settingsCancelButtonStyle, padding: '5px 10px' }}>
+                      Cancel
+                    </button>
+                    <button onClick={() => confirmDelete(rule.id)} style={{ ...settingsPrimaryButtonStyle, background: 'var(--danger)', padding: '5px 10px' }}>
+                      Confirm
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button onClick={() => setEditingId(rule.id)} title="Edit rule" style={settingsIconButtonStyle}>
+                      <Pencil size={14} />
+                    </button>
+                    <button onClick={() => setPendingId(rule.id)} title="Delete rule" style={settingsIconButtonStyle}>
+                      <Trash2 size={14} />
+                    </button>
+                  </>
+                )}
+              </div>
+              {blocked?.id === rule.id && <div style={{ fontFamily: 'var(--font)', fontSize: 12, color: 'var(--danger)', marginTop: 4 }}>{blocked.message}</div>}
+            </div>
+          ),
+        )}
+        {rules.length === 0 && !creating && <div style={{ fontFamily: 'var(--font)', fontSize: 13, color: 'var(--ink-muted)' }}>No overtime rules yet.</div>}
+      </div>
+    </div>
+  )
+}
+
+const SKILL_TYPE_LABEL: Record<SkillType, string> = {
+  skill: 'Skill',
+  certification: 'Certification',
+  visa: 'Visa',
+  credential: 'Credential',
+}
+
+function SkillForm({ skill, onCancel, onSaved }: { skill?: Skill; onCancel: () => void; onSaved: () => void }) {
+  const [name, setName] = useState(skill?.name ?? '')
+  const [type, setType] = useState<SkillType>(skill?.type ?? 'skill')
+  const [expiryTracked, setExpiryTracked] = useState(skill?.expiry_tracked ?? false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | undefined>(undefined)
+
+  async function submit() {
+    if (!name.trim()) {
+      setError('Name is required.')
+      return
+    }
+    setSaving(true)
+    setError(undefined)
+    try {
+      const payload = { name, type, expiry_tracked: expiryTracked }
+      if (skill) await updateSkill(skill.id, payload)
+      else await createSkill(payload)
+      onSaved()
+    } catch {
+      setError('Could not save that skill.')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{ ...settingsRowStyle, flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
+        <label style={{ ...settingsLabelStyle, flex: 1.4 }}>
+          Name
+          <input value={name} onChange={(e) => setName(e.target.value)} style={settingsInputStyle} />
+        </label>
+        <label style={{ ...settingsLabelStyle, flex: 1 }}>
+          Type
+          <select value={type} onChange={(e) => setType(e.target.value as SkillType)} style={settingsInputStyle}>
+            <option value="skill">Skill</option>
+            <option value="certification">Certification</option>
+            <option value="visa">Visa</option>
+            <option value="credential">Credential</option>
+          </select>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font)', fontSize: 12.5, color: 'var(--ink-muted)', paddingBottom: 8, whiteSpace: 'nowrap' }}>
+          <input type="checkbox" checked={expiryTracked} onChange={(e) => setExpiryTracked(e.target.checked)} />
+          Track expiry
+        </label>
+      </div>
+      {error && <div style={{ fontFamily: 'var(--font)', fontSize: 12, color: 'var(--danger)' }}>{error}</div>}
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <button onClick={onCancel} style={settingsCancelButtonStyle}>
+          Cancel
+        </button>
+        <button onClick={submit} disabled={saving} style={{ ...settingsPrimaryButtonStyle, opacity: saving ? 0.7 : 1 }}>
+          {saving ? 'Saving…' : skill ? 'Save' : 'Add skill'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function SkillsSection({ skills, reload }: { skills: Skill[]; reload: () => void }) {
+  const [creating, setCreating] = useState(false)
+  const [editingId, setEditingId] = useState<string | undefined>(undefined)
+  const { pendingId, setPendingId, blocked, confirmDelete } = useDeleteWithGuard(deleteSkill, reload)
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <span style={{ fontFamily: 'var(--font)', fontWeight: 600, fontSize: 14, color: 'var(--ink-muted)' }}>Skills</span>
+        {!creating && (
+          <button onClick={() => setCreating(true)} style={settingsAddButtonStyle}>
+            <Plus size={13} /> Add skill
+          </button>
+        )}
+      </div>
+      {creating && (
+        <div style={{ marginBottom: 10 }}>
+          <SkillForm onCancel={() => setCreating(false)} onSaved={() => { setCreating(false); reload() }} />
+        </div>
+      )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {skills.map((skill) =>
+          editingId === skill.id ? (
+            <SkillForm key={skill.id} skill={skill} onCancel={() => setEditingId(undefined)} onSaved={() => { setEditingId(undefined); reload() }} />
+          ) : (
+            <div key={skill.id}>
+              <div style={settingsRowStyle}>
+                <div style={{ flex: 1, fontFamily: 'var(--font)', fontSize: 13.5, color: 'var(--ink)' }}>
+                  <span style={{ fontWeight: 600 }}>{skill.name}</span>
+                  <span style={{ color: 'var(--ink-muted)' }}>
+                    {' '}
+                    · {SKILL_TYPE_LABEL[skill.type]}
+                    {skill.expiry_tracked ? ' · expiry tracked' : ''}
+                  </span>
+                </div>
+                {pendingId === skill.id ? (
+                  <>
+                    <span style={{ fontFamily: 'var(--font)', fontSize: 12, color: 'var(--ink-muted)' }}>Delete this skill?</span>
+                    <button onClick={() => setPendingId(undefined)} style={{ ...settingsCancelButtonStyle, padding: '5px 10px' }}>
+                      Cancel
+                    </button>
+                    <button onClick={() => confirmDelete(skill.id)} style={{ ...settingsPrimaryButtonStyle, background: 'var(--danger)', padding: '5px 10px' }}>
+                      Confirm
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button onClick={() => setEditingId(skill.id)} title="Edit skill" style={settingsIconButtonStyle}>
+                      <Pencil size={14} />
+                    </button>
+                    <button onClick={() => setPendingId(skill.id)} title="Delete skill" style={settingsIconButtonStyle}>
+                      <Trash2 size={14} />
+                    </button>
+                  </>
+                )}
+              </div>
+              {blocked?.id === skill.id && <div style={{ fontFamily: 'var(--font)', fontSize: 12, color: 'var(--danger)', marginTop: 4 }}>{blocked.message}</div>}
+            </div>
+          ),
+        )}
+        {skills.length === 0 && !creating && <div style={{ fontFamily: 'var(--font)', fontSize: 13, color: 'var(--ink-muted)' }}>No skills yet.</div>}
+      </div>
+    </div>
+  )
+}
+
+type SettingsTabKey = 'roles' | 'overtime' | 'skills'
+const SETTINGS_TABS: { key: SettingsTabKey; label: string }[] = [
+  { key: 'roles', label: 'Roles' },
+  { key: 'overtime', label: 'Overtime rules' },
+  { key: 'skills', label: 'Skills' },
+]
+
+function SettingsContent() {
+  const [tab, setTab] = useState<SettingsTabKey>('roles')
+  const { data: roles, reload: reloadRoles } = useRoles()
+  const { data: overtimeRules, reload: reloadOvertimeRules } = useOvertimeRules()
+  const { data: skills, reload: reloadSkills } = useSkills()
+
+  return (
+    <div style={{ flex: 1, overflowY: 'auto', padding: '24px 32px' }}>
+      <div style={{ fontFamily: 'var(--font)', fontWeight: 700, fontSize: 24, color: 'var(--ink)', marginBottom: 4 }}>Settings</div>
+      <div style={{ fontFamily: 'var(--font)', fontSize: 13, color: 'var(--ink-muted)', marginBottom: 20 }}>Reference data schedulers curate — roles, overtime rules, and skills.</div>
+
+      <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--line)', marginBottom: 20 }}>
+        {SETTINGS_TABS.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            style={{
+              border: 'none',
+              background: 'none',
+              cursor: 'pointer',
+              padding: '8px 4px',
+              marginRight: 20,
+              fontFamily: 'var(--font)',
+              fontWeight: 600,
+              fontSize: 13,
+              color: tab === t.key ? 'var(--primary)' : 'var(--ink-muted)',
+              borderBottom: tab === t.key ? '2px solid var(--primary)' : '2px solid transparent',
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ maxWidth: 640 }}>
+        {tab === 'roles' && <RolesSection roles={roles} reload={reloadRoles} />}
+        {tab === 'overtime' && <OvertimeRulesSection rules={overtimeRules} reload={reloadOvertimeRules} />}
+        {tab === 'skills' && <SkillsSection skills={skills} reload={reloadSkills} />}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Suite — the "Simplified Suite" core landing view (unchanged from the
 // prototype — purely navigational, no live data of its own yet since no
 // suite-core service exists).
@@ -3060,6 +3541,7 @@ export function RaltoDesktopApp() {
               />
             )}
             {active === 'crew' && <CrewContent people={people} roles={rolesList} reloadPeople={reloadPeople} />}
+            {active === 'settings' && <SettingsContent />}
           </>
         )}
       </div>

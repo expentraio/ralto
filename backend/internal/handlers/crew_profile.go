@@ -6,21 +6,35 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"golang.org/x/crypto/bcrypt"
 
 	"ralto/internal/middleware"
 	"ralto/internal/models"
 )
 
-// updateMyProfileRequest is deliberately narrow — a crew member can edit
-// their own contact details and notification preferences, not their rate,
-// employment type, or preferred_status (those are scheduler-owned fields).
+// updateMyProfileRequest is deliberately its own narrow type rather than
+// personWriteRequest — a crew member can edit their own contact details and
+// notification preferences, not their rate, employment type, status, or
+// preferred_status (those are scheduler-owned fields), and this struct
+// simply has no field for them to be silently accepted-and-ignored through.
 type updateMyProfileRequest struct {
+	Email                string  `json:"email"`
 	Phone                *string `json:"phone"`
 	BaseLocation         *string `json:"base_location"`
 	PhoneNumber          *string `json:"phone_number"`
 	NotificationChannels *string `json:"notification_channels"`
+	// CurrentPassword is required only when Email differs from what's on
+	// file — see below. Ignored otherwise.
+	CurrentPassword string `json:"current_password"`
 }
 
+// UpdateMyProfile lets a crew member edit their own contact details.
+// Email doubles as the crew login identifier, so changing it re-proves the
+// current password first — reusing the exact bcrypt check
+// ChangeOwnCrewPassword already does, rather than a second implementation
+// of the same verification. The whole request is rejected (nothing saved,
+// email included) if that check is required and fails; the other three
+// fields save with no password check at all when email isn't changing.
 func (a *API) UpdateMyProfile(w http.ResponseWriter, r *http.Request) {
 	claims, _ := middleware.CrewFromContext(r.Context())
 	var req updateMyProfileRequest
@@ -28,12 +42,35 @@ func (a *API) UpdateMyProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+
+	newEmail := normalizeEmail(req.Email)
+
+	// password_hash is guaranteed set here, the same reasoning
+	// ChangeOwnCrewPassword's own comment gives: reaching any /api/crew/*
+	// route at all requires a session, which only exists once a password
+	// has been set.
+	var currentEmail, passwordHash string
+	if err := a.DB.QueryRow(r.Context(),
+		`SELECT email, password_hash FROM people WHERE id = $1 AND organisation_id = $2`,
+		claims.PersonID, currentOrgID,
+	).Scan(&currentEmail, &passwordHash); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update profile")
+		return
+	}
+
+	if newEmail != normalizeEmail(currentEmail) {
+		if bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.CurrentPassword)) != nil {
+			writeError(w, http.StatusUnauthorized, "current password is incorrect")
+			return
+		}
+	}
+
 	var p models.Person
 	err := scanPerson(a.DB.QueryRow(r.Context(),
-		`UPDATE people SET phone = $1, base_location = $2, phone_number = $3, notification_channels = $4, updated_at = now()
-		 WHERE id = $5 AND organisation_id = $6
+		`UPDATE people SET email = $1, phone = $2, base_location = $3, phone_number = $4, notification_channels = $5, updated_at = now()
+		 WHERE id = $6 AND organisation_id = $7
 		 RETURNING `+personSelectColumns,
-		req.Phone, req.BaseLocation, req.PhoneNumber, req.NotificationChannels, claims.PersonID, currentOrgID,
+		newEmail, req.Phone, req.BaseLocation, req.PhoneNumber, req.NotificationChannels, claims.PersonID, currentOrgID,
 	), &p)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "person not found")

@@ -106,6 +106,15 @@ func registerStaffRoutes(r chi.Router, api *handlers.API) {
 		r.Route("/skills", func(r chi.Router) {
 			r.Get("/", api.ListSkills)
 			r.Post("/", api.CreateSkill)
+			r.Put("/{id}", api.UpdateSkill)
+			r.Delete("/{id}", api.DeleteSkill)
+		})
+
+		r.Route("/overtime-rules", func(r chi.Router) {
+			r.Get("/", api.ListOvertimeRules)
+			r.Post("/", api.CreateOvertimeRule)
+			r.Put("/{id}", api.UpdateOvertimeRule)
+			r.Delete("/{id}", api.DeleteOvertimeRule)
 		})
 
 		r.Route("/bookings", func(r chi.Router) {

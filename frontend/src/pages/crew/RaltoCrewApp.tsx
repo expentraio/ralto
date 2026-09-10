@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Home as HomeIcon, CalendarCheck, User, ChevronLeft, MapPin, Phone, FileText, Bell, Check, CheckCircle2, Clock, X, CalendarDays, ChevronRight } from 'lucide-react'
-import { api } from '../../lib/api'
+import { Home as HomeIcon, CalendarCheck, User, ChevronLeft, MapPin, Phone, Mail, Pencil, FileText, Bell, Check, CheckCircle2, Clock, X, CalendarDays, ChevronRight } from 'lucide-react'
+import { api, ApiError } from '../../lib/api'
 import { formatTime } from '../../lib/format'
 import { useCrewAuth } from '../../context/CrewAuthContext'
-import type { AvailabilityRequest, AvailabilityResponseValue, CrewBooking, JobContact, OperationalAlert, PersonDocument } from '../../types'
+import type { AvailabilityRequest, AvailabilityResponseValue, CrewBooking, JobContact, OperationalAlert, Person, PersonDocument } from '../../types'
 
 // ---------------------------------------------------------------------------
 // Ralto crew app — converted from ralto-crew-mobile.jsx. Renders
@@ -355,21 +355,177 @@ const DOCUMENT_TYPE_LABEL: Record<PersonDocument['type'], string> = {
   production_credential: 'Production credential',
 }
 
+// ProfileEditForm — email/phone/base_location/notification_channels only.
+// This is deliberately not the full picture: employment type, rate,
+// preferred status, and notes are scheduler-owned and this screen has no
+// field for any of them — matching what UpdateMyProfile actually accepts,
+// not hiding fields that the API would otherwise honour.
+function ProfileEditForm({ person, onCancel, onSaved }: { person: Person; onCancel: () => void; onSaved: (p: Person) => void }) {
+  const [email, setEmail] = useState(person.email)
+  const [phone, setPhone] = useState(person.phone ?? '')
+  const [baseLocation, setBaseLocation] = useState(person.base_location ?? '')
+  const initialChannels = useMemo(() => {
+    try {
+      return person.notification_channels ? (JSON.parse(person.notification_channels) as { email?: boolean; whatsapp?: boolean }) : {}
+    } catch {
+      return {}
+    }
+  }, [person.notification_channels])
+  const [notifyEmail, setNotifyEmail] = useState(initialChannels.email !== false)
+  const [notifyWhatsapp, setNotifyWhatsapp] = useState(initialChannels.whatsapp !== false)
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | undefined>(undefined)
+
+  // Progressive disclosure: the password field only appears once email has
+  // actually been touched — the requirement is behavioural (enforced
+  // server-side regardless), not about this exact interaction shape.
+  const emailChanged = email.trim().toLowerCase() !== person.email.trim().toLowerCase()
+
+  const inputStyle = { border: '1px solid var(--line)', borderRadius: 8, padding: '10px 12px', fontFamily: 'var(--font-body)', fontSize: 14, color: 'var(--ink)', background: '#fff', width: '100%', boxSizing: 'border-box' as const }
+  const labelStyle = { display: 'flex', flexDirection: 'column' as const, gap: 5, fontFamily: 'var(--font-body)', fontSize: 12.5, color: 'var(--ink-muted)', marginTop: 14 }
+
+  async function submit() {
+    setError(undefined)
+    if (!email.trim()) {
+      setError('Email is required.')
+      return
+    }
+    if (emailChanged && !currentPassword) {
+      setError('Enter your current password to change your email.')
+      return
+    }
+    setSaving(true)
+    try {
+      const updated = await api.put<Person>('/crew/me', {
+        email,
+        phone: phone || undefined,
+        base_location: baseLocation || undefined,
+        // Not surfaced on this form — carried forward as-is so saving
+        // phone/location/notifications doesn't silently blank it out.
+        phone_number: person.phone_number,
+        notification_channels: JSON.stringify({ email: notifyEmail, whatsapp: notifyWhatsapp }),
+        current_password: emailChanged ? currentPassword : undefined,
+      })
+      onSaved(updated)
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        setError('Current password is incorrect.')
+      } else {
+        setError('Could not save — check the fields and try again.')
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div>
+      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 20, color: 'var(--ink)' }}>Edit profile</div>
+
+      <label style={{ ...labelStyle, marginTop: 18 }}>
+        Email
+        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} style={inputStyle} />
+      </label>
+      <label style={labelStyle}>
+        Phone
+        <input value={phone} onChange={(e) => setPhone(e.target.value)} style={inputStyle} />
+      </label>
+      <label style={labelStyle}>
+        Base location
+        <input value={baseLocation} onChange={(e) => setBaseLocation(e.target.value)} style={inputStyle} />
+      </label>
+
+      <div style={labelStyle}>
+        Notifications
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--font-body)', fontSize: 14, color: 'var(--ink)' }}>
+            <input type="checkbox" checked={notifyEmail} onChange={(e) => setNotifyEmail(e.target.checked)} />
+            Email
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--font-body)', fontSize: 14, color: 'var(--ink)' }}>
+            <input type="checkbox" checked={notifyWhatsapp} onChange={(e) => setNotifyWhatsapp(e.target.checked)} />
+            WhatsApp
+          </label>
+        </div>
+      </div>
+
+      {emailChanged && (
+        <label style={labelStyle}>
+          Current password (required to change email)
+          <input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} style={inputStyle} />
+        </label>
+      )}
+
+      {error && <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--danger)', marginTop: 12 }}>{error}</div>}
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 20 }}>
+        <button
+          onClick={onCancel}
+          style={{ flex: 1, background: '#fff', border: '1px solid var(--line)', borderRadius: 10, padding: '11px 0', fontFamily: 'var(--font-body)', fontWeight: 600, fontSize: 14, color: 'var(--ink)', cursor: 'pointer' }}
+        >
+          Cancel
+        </button>
+        <button
+          onClick={submit}
+          disabled={saving}
+          style={{ flex: 1, background: 'var(--primary)', border: 'none', borderRadius: 10, padding: '11px 0', fontFamily: 'var(--font-body)', fontWeight: 600, fontSize: 14, color: '#fff', cursor: 'pointer', opacity: saving ? 0.7 : 1 }}
+        >
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function ProfileScreen() {
-  const { person, logout } = useCrewAuth()
+  const { person, logout, updatePerson } = useCrewAuth()
   const [documents, setDocuments] = useState<PersonDocument[]>([])
+  const [editing, setEditing] = useState(false)
 
   useEffect(() => {
     api.get<PersonDocument[]>('/crew/documents').then(setDocuments)
   }, [])
 
+  if (editing && person) {
+    return (
+      <div style={{ padding: '22px 20px' }}>
+        <ProfileEditForm
+          person={person}
+          onCancel={() => setEditing(false)}
+          onSaved={(p) => {
+            updatePerson(p)
+            setEditing(false)
+          }}
+        />
+      </div>
+    )
+  }
+
   return (
     <div style={{ padding: '22px 20px' }}>
-      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 20, color: 'var(--ink)' }}>
-        {person?.first_name} {person?.last_name}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 20, color: 'var(--ink)' }}>
+            {person?.first_name} {person?.last_name}
+          </div>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 14, color: 'var(--ink-muted)', marginTop: 4 }}>
+            {person?.base_location ? `Based in ${person.base_location}` : 'Location not set'}
+          </div>
+        </div>
+        <button
+          onClick={() => setEditing(true)}
+          style={{ display: 'flex', alignItems: 'center', gap: 5, border: '1px solid var(--line)', background: '#fff', borderRadius: 8, padding: '7px 12px', fontFamily: 'var(--font-body)', fontWeight: 600, fontSize: 12.5, color: 'var(--ink)', cursor: 'pointer', flexShrink: 0 }}
+        >
+          <Pencil size={13} /> Edit
+        </button>
       </div>
-      <div style={{ fontFamily: 'var(--font-body)', fontSize: 14, color: 'var(--ink-muted)', marginTop: 4 }}>
-        {person?.base_location ? `Based in ${person.base_location}` : 'Location not set'}
+
+      <SectionLabelInline>Contact</SectionLabelInline>
+      <div style={{ border: '1px solid var(--line)', borderRadius: 12, background: '#fff' }}>
+        <Row icon={Mail} label="Email" value={person?.email ?? 'Not set'} />
+        <Divider />
+        <Row icon={Phone} label="Phone" value={person?.phone || 'Not set'} />
       </div>
 
       <SectionLabelInline>Documents</SectionLabelInline>

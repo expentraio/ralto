@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 
 	"ralto/internal/models"
 )
@@ -52,6 +54,54 @@ func (a *API) CreateSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, s)
+}
+
+func (a *API) UpdateSkill(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req skillWriteRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	var s models.Skill
+	err := a.DB.QueryRow(r.Context(),
+		`UPDATE skills SET name = $1, type = $2, expiry_tracked = $3 WHERE id = $4 AND organisation_id = $5 RETURNING id, name, type, expiry_tracked`,
+		req.Name, req.Type, req.ExpiryTracked, id, currentOrgID,
+	).Scan(&s.ID, &s.Name, &s.Type, &s.ExpiryTracked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "skill not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to update skill")
+		return
+	}
+	writeJSON(w, http.StatusOK, s)
+}
+
+// DeleteSkill is blocked if any person currently holds an instance of this
+// skill — same guard shape as DeletePerson and DeleteRole.
+func (a *API) DeleteSkill(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var inUse bool
+	if err := a.DB.QueryRow(r.Context(), `SELECT EXISTS (SELECT 1 FROM person_skills WHERE skill_id = $1)`, id).Scan(&inUse); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete skill")
+		return
+	}
+	if inUse {
+		writeError(w, http.StatusConflict, "skill is still held by one or more people — remove those first")
+		return
+	}
+	tag, err := a.DB.Exec(r.Context(), `DELETE FROM skills WHERE id = $1 AND organisation_id = $2`, id, currentOrgID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to delete skill")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "skill not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // --- PersonSkill (a specific person's specific instance of a Skill) ---

@@ -13,6 +13,7 @@ import type {
   JobRequirementWithCounts,
   JobStatus,
   OperationalAlert,
+  OvertimeRule,
   Person,
   PersonRole,
   PersonStatus,
@@ -21,6 +22,8 @@ import type {
   ProspectiveEvent,
   ResourceCalendarResponse,
   Role,
+  Skill,
+  SkillType,
   Venue,
 } from '../types'
 
@@ -69,6 +72,50 @@ export function useAlerts() {
 
 export function useRoles() {
   return useCollection<Role>('/roles')
+}
+
+export function createRole(input: { name: string; category?: string }) {
+  return api.post<Role>('/roles', input)
+}
+
+export function updateRole(id: string, input: { name: string; category?: string }) {
+  return api.put<Role>(`/roles/${id}`, input)
+}
+
+export function deleteRole(id: string) {
+  return api.delete<{ ok: boolean }>(`/roles/${id}`)
+}
+
+export function useOvertimeRules() {
+  return useCollection<OvertimeRule>('/overtime-rules')
+}
+
+export function createOvertimeRule(input: { name: string; threshold_hours: number; multiplier: number }) {
+  return api.post<OvertimeRule>('/overtime-rules', input)
+}
+
+export function updateOvertimeRule(id: string, input: { name: string; threshold_hours: number; multiplier: number }) {
+  return api.put<OvertimeRule>(`/overtime-rules/${id}`, input)
+}
+
+export function deleteOvertimeRule(id: string) {
+  return api.delete<{ ok: boolean }>(`/overtime-rules/${id}`)
+}
+
+export function useSkills() {
+  return useCollection<Skill>('/skills')
+}
+
+export function createSkill(input: { name: string; type: SkillType; expiry_tracked: boolean }) {
+  return api.post<Skill>('/skills', input)
+}
+
+export function updateSkill(id: string, input: { name: string; type: SkillType; expiry_tracked: boolean }) {
+  return api.put<Skill>(`/skills/${id}`, input)
+}
+
+export function deleteSkill(id: string) {
+  return api.delete<{ ok: boolean }>(`/skills/${id}`)
 }
 
 export function useProjects() {
