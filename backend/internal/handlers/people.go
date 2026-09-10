@@ -28,18 +28,39 @@ func scanPerson(row pgx.Row, p *models.Person, extra ...interface{}) error {
 	return row.Scan(dest...)
 }
 
+// personListResponse adds the person's primary role's category onto the
+// plain Person shape — Crew's discipline filter needs this on every card,
+// and CrewContent was deliberately built without a per-person roles
+// follow-up call to avoid an N+1 (see the comment at the top of the Crew
+// section in RaltoDesktopApp.tsx), so it has to come back with the list
+// itself rather than from a separate lookup.
+type personListResponse struct {
+	models.Person
+	PrimaryRoleCategory *string `json:"primary_role_category,omitempty"`
+}
+
 func (a *API) ListPeople(w http.ResponseWriter, r *http.Request) {
-	rows, err := a.DB.Query(r.Context(), `SELECT `+personSelectColumns+` FROM people WHERE organisation_id = $1 ORDER BY first_name, last_name`, currentOrgID)
+	// A scalar subquery rather than a plain LEFT JOIN on person_roles/roles:
+	// is_primary isn't actually enforced as at-most-one-per-person at the DB
+	// level, so a straight JOIN could fan a person out into duplicate rows
+	// if they somehow ended up with more than one primary role. This stays
+	// a single query either way — no N+1 — and LIMIT 1 guarantees exactly
+	// one output row per person regardless of that data ever going bad.
+	rows, err := a.DB.Query(r.Context(),
+		`SELECT `+personSelectColumns+`,
+		        (SELECT ro.category FROM person_roles pr JOIN roles ro ON ro.id = pr.role_id
+		         WHERE pr.person_id = p.id AND pr.is_primary = true LIMIT 1) AS primary_role_category
+		 FROM people p WHERE p.organisation_id = $1 ORDER BY p.first_name, p.last_name`, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list people")
 		return
 	}
 	defer rows.Close()
 
-	people := []models.Person{}
+	people := []personListResponse{}
 	for rows.Next() {
-		var p models.Person
-		if err := scanPerson(rows, &p); err != nil {
+		var p personListResponse
+		if err := scanPerson(rows, &p.Person, &p.PrimaryRoleCategory); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to list people")
 			return
 		}

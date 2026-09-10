@@ -38,6 +38,10 @@ export interface Person {
   must_change_password: boolean
   created_at: string
   updated_at: string
+  // Only present on ListPeople's response (the /people list) — the primary
+  // role's category, for Crew's discipline filter. Absent (not just falsy)
+  // on every other endpoint that returns a bare Person.
+  primary_role_category?: string
 }
 
 // A Role a Person can be booked into (person_roles) — is_primary marks the

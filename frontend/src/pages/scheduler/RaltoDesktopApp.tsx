@@ -2129,9 +2129,11 @@ function ResourceCalendarContent({
 // cross-reference against live bookings for every person. Doing that for
 // real would mean an aggregate endpoint this Phase 1 backend doesn't have
 // yet (see backend/internal/handlers/people.go) — so this screen shows
-// each Person's own real fields (role via primary PersonRole isn't fetched
-// per-row either, to avoid an N+1 call per card) and filters by
-// preferred_status/employment_type instead of a derived booking status.
+// each Person's own real fields and filters by preferred_status/
+// employment_type instead of a derived booking status. Primary role IS
+// fetched per-row — but as a column on ListPeople's own response
+// (primary_role_category, via a subquery server-side), not a per-person
+// follow-up call, so the N+1 this screen was built to avoid stays avoided.
 // ---------------------------------------------------------------------------
 
 const CREW_FILTERS = [
@@ -2140,6 +2142,38 @@ const CREW_FILTERS = [
   { key: 'staff', label: 'Staff' },
   { key: 'freelancer', label: 'Freelancer' },
 ] as const
+
+// A category's own filter button only appears once at least this many
+// people carry it — the categories that actually exist today (see
+// docs/ralto_settings_spec_v0_2.md's sibling brief) don't match the five
+// originally requested, and Settings → Roles is how that gets reconciled,
+// not a hardcoded label list here. A one-off (a typo, a category someone's
+// about to rename) folds into "Other" instead of fragmenting the row —
+// same principle as "no one" and "no primary role" both landing there.
+const MIN_DISCIPLINE_COUNT = 2
+const OTHER_DISCIPLINE = 'other'
+
+function disciplineBuckets(people: Person[]): { categories: string[]; hasOther: boolean } {
+  const counts = new Map<string, number>()
+  let otherCount = 0
+  for (const p of people) {
+    const cat = p.primary_role_category?.trim()
+    if (cat) counts.set(cat, (counts.get(cat) ?? 0) + 1)
+    else otherCount++
+  }
+  const categories: string[] = []
+  for (const [cat, count] of counts) {
+    if (count >= MIN_DISCIPLINE_COUNT) categories.push(cat)
+    else otherCount += count
+  }
+  categories.sort((a, b) => a.localeCompare(b))
+  return { categories, hasOther: otherCount > 0 }
+}
+
+function disciplineOf(person: Person, realCategories: Set<string>): string {
+  const cat = person.primary_role_category?.trim()
+  return cat && realCategories.has(cat) ? cat : OTHER_DISCIPLINE
+}
 
 // personToWriteInput — UpdatePerson overwrites every column in
 // personWriteRequest, not just the ones a particular action means to
@@ -2348,7 +2382,10 @@ function PersonCard({ person, onClick }: { person: Person; onClick: () => void }
             </span>
             {person.preferred_status === 'preferred' && <Star size={12} color="var(--primary)" fill="var(--primary)" />}
           </div>
-          <div style={{ fontFamily: 'var(--font)', fontSize: 12.5, color: 'var(--ink-muted)', marginTop: 2, textTransform: 'capitalize' }}>{person.employment_type}</div>
+          <div style={{ fontFamily: 'var(--font)', fontSize: 12.5, color: 'var(--ink-muted)', marginTop: 2, textTransform: 'capitalize' }}>
+            {person.employment_type}
+            {person.primary_role_category ? ` · ${person.primary_role_category}` : ''}
+          </div>
           {person.base_location && (
             <div style={{ fontFamily: 'var(--font)', fontSize: 12, color: 'var(--ink-muted)', marginTop: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
               <MapPin size={11} /> {person.base_location}
@@ -2839,15 +2876,20 @@ function PersonDetail({ person, roles, onBack, reloadPeople }: { person: Person;
 function CrewContent({ people, roles, reloadPeople }: { people: Person[]; roles: Role[]; reloadPeople: () => void }) {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<(typeof CREW_FILTERS)[number]['key']>('all')
+  const [discipline, setDiscipline] = useState<string>('all')
   const [selectedPersonId, setSelectedPersonId] = useState<string | undefined>(undefined)
   const [creating, setCreating] = useState(false)
+
+  const { categories: disciplineCategories, hasOther: disciplineHasOther } = useMemo(() => disciplineBuckets(people), [people])
+  const disciplineCategorySet = useMemo(() => new Set(disciplineCategories), [disciplineCategories])
 
   const filtered = useMemo(() => {
     let list = people.filter((p) => `${p.first_name} ${p.last_name}`.toLowerCase().includes(query.toLowerCase()))
     if (filter === 'preferred') list = list.filter((p) => p.preferred_status === 'preferred')
     if (filter === 'staff' || filter === 'freelancer') list = list.filter((p) => p.employment_type === filter)
+    if (discipline !== 'all') list = list.filter((p) => disciplineOf(p, disciplineCategorySet) === discipline)
     return list
-  }, [people, query, filter])
+  }, [people, query, filter, discipline, disciplineCategorySet])
 
   if (creating) {
     return (
@@ -2886,7 +2928,7 @@ function CrewContent({ people, roles, reloadPeople }: { people: Person[]; roles:
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: disciplineCategories.length > 0 || disciplineHasOther ? 10 : 20 }}>
         {CREW_FILTERS.map((f) => {
           const isActive = filter === f.key
           return (
@@ -2900,6 +2942,24 @@ function CrewContent({ people, roles, reloadPeople }: { people: Person[]; roles:
           )
         })}
       </div>
+
+      {(disciplineCategories.length > 0 || disciplineHasOther) && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
+          {(['all', ...disciplineCategories, ...(disciplineHasOther ? [OTHER_DISCIPLINE] : [])] as const).map((d) => {
+            const isActive = discipline === d
+            const label = d === 'all' ? 'All disciplines' : d === OTHER_DISCIPLINE ? 'Other' : d
+            return (
+              <button
+                key={d}
+                onClick={() => setDiscipline(d)}
+                style={{ background: isActive ? 'var(--primary-tint)' : '#fff', color: isActive ? 'var(--primary)' : 'var(--ink-muted)', border: isActive ? '1px solid var(--primary-soft)' : '1px solid var(--line)', borderRadius: 999, padding: '5px 13px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}
+              >
+                {label}
+              </button>
+            )
+          })}
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
         {filtered.map((p) => (
