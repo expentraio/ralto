@@ -178,6 +178,11 @@ export interface Booking {
   responded_at?: string
   confirmed_at?: string
   notes?: string
+  // Only present on ListBookingsForRequirement's response — the booked
+  // person's name, for Jobs' JobRoleRow. Absent on every other endpoint
+  // that returns a bare Booking.
+  first_name?: string
+  last_name?: string
 }
 
 export interface CrewBooking extends Booking {

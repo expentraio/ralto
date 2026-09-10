@@ -51,23 +51,41 @@ func crewCTAURL(path string) string {
 	return origin + "/crew" + path
 }
 
+// bookingWithPersonResponse adds the booked person's name onto the plain
+// Booking shape — Jobs' JobRoleRow shows actual names now, not just counts,
+// and needs that in the same call rather than a separate lookup per
+// booking. Cancelled and Declined bookings are both left out entirely
+// rather than returned with a status badge — Jobs shouldn't show anyone no
+// longer actually booked (a decline is exactly as "not booked" as a
+// cancellation, just recorded before anything was ever confirmed), and
+// DeletePerson-style history is already preserved in the row itself for
+// anyone who queries it directly.
+type bookingWithPersonResponse struct {
+	models.Booking
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+}
+
 func (a *API) ListBookingsForRequirement(w http.ResponseWriter, r *http.Request) {
 	reqID := chi.URLParam(r, "reqId")
 	rows, err := a.DB.Query(r.Context(),
-		`SELECT id, job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override,
-		        offered_at, responded_at, confirmed_at, notes
-		 FROM bookings WHERE job_requirement_id = $1 AND organisation_id = $2 ORDER BY offered_at`, reqID, currentOrgID)
+		`SELECT b.id, b.job_requirement_id, b.person_id, b.status, b.start_date, b.end_date, b.call_time, b.rate_override,
+		        b.offered_at, b.responded_at, b.confirmed_at, b.notes, p.first_name, p.last_name
+		 FROM bookings b
+		 JOIN people p ON p.id = b.person_id
+		 WHERE b.job_requirement_id = $1 AND b.status NOT IN ('cancelled', 'declined') AND b.organisation_id = $2
+		 ORDER BY b.offered_at`, reqID, currentOrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list bookings")
 		return
 	}
 	defer rows.Close()
 
-	bookings := []models.Booking{}
+	bookings := []bookingWithPersonResponse{}
 	for rows.Next() {
-		var b models.Booking
+		var b bookingWithPersonResponse
 		if err := rows.Scan(&b.ID, &b.JobRequirementID, &b.PersonID, &b.Status, &b.StartDate, &b.EndDate, &b.CallTime,
-			&b.RateOverride, &b.OfferedAt, &b.RespondedAt, &b.ConfirmedAt, &b.Notes); err != nil {
+			&b.RateOverride, &b.OfferedAt, &b.RespondedAt, &b.ConfirmedAt, &b.Notes, &b.FirstName, &b.LastName); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to list bookings")
 			return
 		}
@@ -90,8 +108,15 @@ type createBookingRequest struct {
 // from the Planner screen. Pencilled means you're holding someone without
 // having formally asked, so unlike an Offer it does not notify the
 // person — see PromoteBookingToOffer for the later "actually ask them"
-// step. Rejects with 409 if the parent Job is cancelled/complete,
-// mirroring Equiptra's live project-status guard on booking creation.
+// step. Also accepts Declined directly — the phone-call-based "Not
+// available" action in Planner records a no from a call that never went
+// through the digital offer/respond flow, reusing the same status a real
+// CrewRespondToOffer decline produces (so it surfaces in the same "Already
+// Asked → Declined" list) rather than a separate one-off tracking shape.
+// No notification fires for a Declined booking either, same reasoning as
+// Pencil: nothing digital happened for the person to be notified about.
+// Rejects with 409 if the parent Job is cancelled/complete, mirroring
+// Equiptra's live project-status guard on booking creation.
 func (a *API) CreateBooking(w http.ResponseWriter, r *http.Request) {
 	reqID := chi.URLParam(r, "reqId")
 	var req createBookingRequest
@@ -102,8 +127,8 @@ func (a *API) CreateBooking(w http.ResponseWriter, r *http.Request) {
 	if req.Status == "" {
 		req.Status = models.BookingStatusOffered
 	}
-	if req.Status != models.BookingStatusOffered && req.Status != models.BookingStatusPencilled {
-		writeError(w, http.StatusBadRequest, "a new booking must start as pencilled or offered")
+	if req.Status != models.BookingStatusOffered && req.Status != models.BookingStatusPencilled && req.Status != models.BookingStatusDeclined {
+		writeError(w, http.StatusBadRequest, "a new booking must start as pencilled, offered, or declined")
 		return
 	}
 
@@ -122,10 +147,13 @@ func (a *API) CreateBooking(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// responded_at is only set up-front for a Declined booking, via the CASE
+	// below — recorded as already answered (the phone call itself was the
+	// response), whereas a fresh pencil/offer has no response yet.
 	var b models.Booking
 	err := a.DB.QueryRow(r.Context(),
-		`INSERT INTO bookings (job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override, notes, offered_at, organisation_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9)
+		`INSERT INTO bookings (job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override, notes, offered_at, responded_at, organisation_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), CASE WHEN $3 = 'declined' THEN now() ELSE NULL END, $9)
 		 RETURNING id, job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override, offered_at, responded_at, confirmed_at, notes`,
 		reqID, req.PersonID, req.Status, req.StartDate, req.EndDate, req.CallTime, req.RateOverride, req.Notes, currentOrgID,
 	).Scan(&b.ID, &b.JobRequirementID, &b.PersonID, &b.Status, &b.StartDate, &b.EndDate, &b.CallTime,

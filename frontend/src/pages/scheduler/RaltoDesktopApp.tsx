@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import {
   LayoutDashboard,
   Calendar,
@@ -56,6 +56,9 @@ import {
   indexById,
   resolveAlert,
   offerBooking,
+  cancelBooking,
+  confirmBooking,
+  listBookingsForRequirement,
   createPerson,
   updatePerson,
   deletePerson,
@@ -82,6 +85,8 @@ import type {
   Availability,
   AvailabilityStatus,
   AvailabilityType,
+  Booking,
+  BookingStatus,
   Client,
   EmploymentType,
   Job,
@@ -917,44 +922,95 @@ function InfoRow({ icon: Icon, label, value }: { icon: typeof CalendarDays; labe
 // and the count. An unfilled role is a link straight into Planner,
 // pre-targeted at this exact requirement — there's nothing to click through
 // to on an already-confirmed role, so those stay plain, non-interactive rows.
-function JobRoleRow({ req, onOpenInPlanner }: { req: JobRequirementWithCounts; onOpenInPlanner: (req: JobRequirementWithCounts) => void }) {
+// BOOKING_STATUS_ICON — one row per person now, each with its own
+// confirmed/pencilled/offered state, so the tick/clock/warning logic
+// JobRoleRow used to compute once for the whole role is needed per booking
+// instead. Pencil reuses the icon literally named for it, matching the
+// same colour the pencil-hatch progress-bar segment already uses elsewhere
+// in this file (RequirementRow).
+const BOOKING_STATUS_ICON: Partial<Record<BookingStatus, { Icon: typeof CheckCircle2; color: string }>> = {
+  confirmed: { Icon: CheckCircle2, color: 'var(--success)' },
+  offered: { Icon: Clock, color: 'var(--attention)' },
+  pencilled: { Icon: Pencil, color: 'var(--primary-soft)' },
+}
+
+function BookedPersonRow({ booking, onCancel }: { booking: Booking; onCancel: () => void }) {
+  const meta = BOOKING_STATUS_ICON[booking.status] ?? BOOKING_STATUS_ICON.offered!
+  const Icon = meta.Icon
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '4px 0' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+        <Icon size={13} color={meta.color} strokeWidth={2.5} />
+        <span style={{ fontFamily: 'var(--font)', fontSize: 12.5, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {booking.first_name} {booking.last_name}
+        </span>
+      </div>
+      <button
+        onClick={onCancel}
+        title="Cancel this booking"
+        style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 2, color: 'var(--ink-muted)', flexShrink: 0, display: 'flex' }}
+      >
+        <X size={13} />
+      </button>
+    </div>
+  )
+}
+
+// JobRoleRow — used to be either a plain (complete) row or a button
+// wrapping the whole thing linking into Planner (incomplete). A role can
+// now be partially filled, so it shows the real names actually booked
+// (whatever their status) plus, only if the role is still short of people
+// (not just short of confirmations — offered/pencilled people aren't
+// "still needed" even though the role isn't confirmed-complete yet), the
+// same "find more in Planner" link as before.
+function JobRoleRow({
+  req,
+  bookings,
+  onOpenInPlanner,
+  onCancelBooking,
+}: {
+  req: JobRequirementWithCounts
+  bookings: Booking[]
+  onOpenInPlanner: (req: JobRequirementWithCounts) => void
+  onCancelBooking: (bookingId: string) => void
+}) {
   const roleComplete = req.quantity_confirmed >= req.quantity_required
+  const stillNeeded = req.quantity_required - req.quantity_confirmed - req.quantity_pencilled - req.quantity_offered
   const StatusIcon = roleComplete ? CheckCircle2 : req.quantity_offered > 0 ? Clock : AlertTriangle
   const statusColor = roleComplete ? 'var(--success)' : 'var(--attention)'
   const statusBg = roleComplete ? 'var(--success-bg)' : 'var(--attention-bg)'
 
-  const rowStyle = {
-    border: '1px solid var(--line)',
-    borderRadius: 12,
-    padding: '12px 14px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-  } as const
-
-  const inner = (
-    <>
-      <span style={{ fontFamily: 'var(--font)', fontWeight: 600, fontSize: 13.5, color: 'var(--ink)' }}>{req.role_name}</span>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-        <span style={{ fontFamily: 'var(--font)', fontVariantNumeric: 'tabular-nums', fontSize: 12.5, fontWeight: 600, color: roleComplete ? 'var(--ink-muted)' : 'var(--attention)' }}>
-          {req.quantity_confirmed}/{req.quantity_required}
-        </span>
-        <div style={{ width: 22, height: 22, borderRadius: '50%', background: statusBg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <StatusIcon size={12} color={statusColor} strokeWidth={2.5} />
+  return (
+    <div style={{ border: '1px solid var(--line)', borderRadius: 12, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <span style={{ fontFamily: 'var(--font)', fontWeight: 600, fontSize: 13.5, color: 'var(--ink)' }}>{req.role_name}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+          <span style={{ fontFamily: 'var(--font)', fontVariantNumeric: 'tabular-nums', fontSize: 12.5, fontWeight: 600, color: roleComplete ? 'var(--ink-muted)' : 'var(--attention)' }}>
+            {req.quantity_confirmed}/{req.quantity_required}
+          </span>
+          <div style={{ width: 22, height: 22, borderRadius: '50%', background: statusBg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <StatusIcon size={12} color={statusColor} strokeWidth={2.5} />
+          </div>
         </div>
       </div>
-    </>
-  )
 
-  if (roleComplete) {
-    return <div style={rowStyle}>{inner}</div>
-  }
+      {bookings.length > 0 && (
+        <div style={{ borderTop: '1px solid var(--line)', paddingTop: 6, display: 'flex', flexDirection: 'column' }}>
+          {bookings.map((b) => (
+            <BookedPersonRow key={b.id} booking={b} onCancel={() => onCancelBooking(b.id)} />
+          ))}
+        </div>
+      )}
 
-  return (
-    <button onClick={() => onOpenInPlanner(req)} style={{ ...rowStyle, width: '100%', textAlign: 'left', background: '#fff', cursor: 'pointer', font: 'inherit' }}>
-      {inner}
-    </button>
+      {stillNeeded > 0 && (
+        <button
+          onClick={() => onOpenInPlanner(req)}
+          style={{ display: 'flex', alignItems: 'center', gap: 4, border: 'none', background: 'none', color: 'var(--primary)', cursor: 'pointer', padding: 0, fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12, textAlign: 'left' }}
+        >
+          Find {stillNeeded} more in Planner <ChevronRight size={12} />
+        </button>
+      )}
+    </div>
   )
 }
 
@@ -1357,6 +1413,8 @@ function JobsContent({
   const [query, setQuery] = useState('')
   const [contacts, setContacts] = useState<JobContact[]>([])
   const [creating, setCreating] = useState(false)
+  const [bookingsByReq, setBookingsByReq] = useState<Record<string, Booking[]>>({})
+  const [confirmEveryoneState, setConfirmEveryoneState] = useState<'idle' | 'confirming' | 'busy'>('idle')
 
   useEffect(() => {
     if (prefill) setCreating(true)
@@ -1373,6 +1431,40 @@ function JobsContent({
     if (!selected) return
     api.get<JobContact[]>(`/jobs/${selected.job.id}/contacts`).then(setContacts).catch(() => setContacts([]))
   }, [selected?.job.id])
+
+  // Bookings-with-names for every role on the selected job, fetched once
+  // per role (bounded by role count, not headcount — not the per-person
+  // N+1 CrewContent was built to avoid) so JobRoleRow can show real names
+  // and "Confirm everyone" can act on all of them at once. Re-runs
+  // whenever summaries reload (selected.requirements gets a fresh array
+  // reference), so a cancel/confirm/pencil/offer anywhere keeps this in
+  // sync without a separate explicit refetch at each call site.
+  const reloadBookings = useCallback(async (reqs: JobRequirementWithCounts[]) => {
+    const entries = await Promise.all(reqs.map(async (r) => [r.id, await listBookingsForRequirement(r.id)] as const))
+    setBookingsByReq(Object.fromEntries(entries))
+  }, [])
+
+  useEffect(() => {
+    if (!selected) return
+    reloadBookings(selected.requirements)
+  }, [selected?.job.id, selected?.requirements, reloadBookings])
+
+  async function handleCancelBooking(bookingId: string) {
+    await cancelBooking(bookingId)
+    reloadSummaries()
+  }
+
+  const pendingBookings = useMemo(
+    () => (selected ? selected.requirements.flatMap((r) => (bookingsByReq[r.id] ?? []).filter((b) => b.status === 'pencilled' || b.status === 'offered')) : []),
+    [selected, bookingsByReq],
+  )
+
+  async function confirmEveryoneNow() {
+    setConfirmEveryoneState('busy')
+    await Promise.all(pendingBookings.map((b) => confirmBooking(b.id)))
+    reloadSummaries()
+    setConfirmEveryoneState('idle')
+  }
 
   function finishCreating(jobId: string) {
     setCreating(false)
@@ -1441,7 +1533,34 @@ function JobsContent({
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10 }}>
           <span style={{ fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12, padding: '4px 10px', borderRadius: 999, color: u.color, background: u.bg }}>{selected.job.status}</span>
           <CommitmentBadge job={selected.job} />
+          {pendingBookings.length > 0 && confirmEveryoneState === 'idle' && (
+            <button
+              onClick={() => setConfirmEveryoneState('confirming')}
+              style={{ display: 'flex', alignItems: 'center', gap: 4, border: 'none', background: 'var(--primary)', color: '#fff', borderRadius: 999, padding: '5px 12px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 11.5, cursor: 'pointer' }}
+            >
+              <Check size={11} /> Confirm everyone ({pendingBookings.length})
+            </button>
+          )}
         </div>
+
+        {confirmEveryoneState === 'confirming' && (
+          <div style={{ border: '1px solid var(--danger)', background: 'var(--danger-bg)', borderRadius: 10, padding: 12, display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
+            <div style={{ fontFamily: 'var(--font)', fontSize: 12.5, color: 'var(--ink)' }}>
+              Confirm all {pendingBookings.length} pencilled/offered {pendingBookings.length === 1 ? 'booking' : 'bookings'} on this job? Each person will get a real confirmation email.
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => setConfirmEveryoneState('idle')} style={{ border: '1px solid var(--line)', background: '#fff', borderRadius: 8, padding: '6px 12px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12, cursor: 'pointer', color: 'var(--ink-muted)' }}>
+                Cancel
+              </button>
+              <button
+                onClick={confirmEveryoneNow}
+                style={{ border: 'none', background: 'var(--danger)', color: '#fff', borderRadius: 8, padding: '6px 12px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}
+              >
+                Yes, confirm all
+              </button>
+            </div>
+          </div>
+        )}
 
         <div style={{ display: 'flex', gap: 32, marginTop: 8, borderBottom: '1px solid var(--line)', paddingBottom: 4 }}>
           <InfoRow icon={CalendarDays} label="Dates" value={`${formatDate(selected.job.start_date)} – ${formatDate(selected.job.end_date)}`} />
@@ -1457,7 +1576,13 @@ function JobsContent({
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           {selected.requirements.map((r) => (
-            <JobRoleRow key={r.id} req={r} onOpenInPlanner={(req) => onOpenRoleInPlanner(req.job_id, req.id)} />
+            <JobRoleRow
+              key={r.id}
+              req={r}
+              bookings={bookingsByReq[r.id] ?? []}
+              onOpenInPlanner={(req) => onOpenRoleInPlanner(req.job_id, req.id)}
+              onCancelBooking={handleCancelBooking}
+            />
           ))}
           {selected.requirements.length === 0 && <div style={{ fontFamily: 'var(--font)', fontSize: 13, color: 'var(--ink-muted)' }}>No role requirements added yet.</div>}
         </div>
@@ -1631,10 +1756,29 @@ function PlannerContent({
 
   const { data: pool, reload: reloadCandidates } = useCandidates(activeReq?.id)
 
+  // The optional second half of "Not available" — offered right after the
+  // decline is recorded, since that's the moment the call's context (did
+  // they say they're out all week?) is still fresh. Skippable: not every
+  // decline comes with "and I'm out all week" attached, so this is just an
+  // inline prompt, not a second required step.
+  const [declinedFollowUp, setDeclinedFollowUp] = useState<{ personId: string; name: string; startDate: string; endDate: string } | undefined>(undefined)
+
   async function handleOffer(personId: string, status: 'offered' | 'pencilled' = 'offered') {
     if (!activeReq) return
     await offerBooking(activeReq.id, personId, activeReq.start_date, activeReq.end_date, activeReq.call_time, status)
     await Promise.all([reloadCandidates(), reloadSummaries()])
+  }
+
+  // "Not available" — a decline recorded straight from the phone call,
+  // never a digital offer/respond round trip. Reuses CreateBooking with
+  // status: 'declined' (no email, same as Pencil) so it lands in the same
+  // Already Asked → Declined list a real digital decline would.
+  async function handleNotAvailable(personId: string, name: string) {
+    if (!activeReq) return
+    const { start_date: startDate, end_date: endDate } = activeReq
+    await offerBooking(activeReq.id, personId, startDate, endDate, activeReq.call_time, 'declined')
+    await Promise.all([reloadCandidates(), reloadSummaries()])
+    setDeclinedFollowUp({ personId, name, startDate, endDate })
   }
 
   if (!summary) {
@@ -1665,6 +1809,23 @@ function PlannerContent({
         <div style={{ flex: 1 }}>
           <div style={{ fontFamily: 'var(--font)', fontWeight: 600, fontSize: 14, color: 'var(--ink-muted)', marginBottom: 12 }}>Crew matching — {activeReq?.role_name}</div>
           <div style={{ border: '1px solid var(--line)', borderRadius: 12, background: '#fff', padding: '16px 18px' }}>
+            {declinedFollowUp && (
+              <div style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 10, padding: 12, marginBottom: 16 }}>
+                <div style={{ fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12.5, color: 'var(--ink)', marginBottom: 8 }}>
+                  Recorded — {declinedFollowUp.name} declined. Mark them unavailable for a wider range too?
+                </div>
+                <AddAvailabilityForm
+                  personId={declinedFollowUp.personId}
+                  initialStartDate={declinedFollowUp.startDate}
+                  initialEndDate={declinedFollowUp.endDate}
+                  onCancel={() => setDeclinedFollowUp(undefined)}
+                  onSaved={() => {
+                    setDeclinedFollowUp(undefined)
+                    reloadCandidates()
+                  }}
+                />
+              </div>
+            )}
             <CandidateGroup title="AVAILABLE & SUITABLE" tone="var(--success)">
               {pool.suitable.length === 0 && <div style={{ fontFamily: 'var(--font)', fontSize: 12.5, color: 'var(--ink-muted)' }}>No one in this group right now.</div>}
               {pool.suitable.map((c) => (
@@ -1693,6 +1854,13 @@ function PlannerContent({
                     >
                       <Check size={12} /> Offer
                     </button>
+                    <button
+                      onClick={() => handleNotAvailable(c.person_id, c.name)}
+                      title="Record a decline from this call — no email sent"
+                      style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'none', color: 'var(--ink-muted)', border: '1px solid var(--line)', borderRadius: 8, padding: '6px 10px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}
+                    >
+                      <X size={12} />
+                    </button>
                   </div>
                 </div>
               ))}
@@ -1719,6 +1887,13 @@ function PlannerContent({
                       style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'none', color: 'var(--ink)', border: '1px solid var(--line)', borderRadius: 8, padding: '6px 12px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}
                     >
                       <Check size={12} /> Offer
+                    </button>
+                    <button
+                      onClick={() => handleNotAvailable(c.person_id, c.name)}
+                      title="Record a decline from this call — no email sent"
+                      style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'none', color: 'var(--ink-muted)', border: '1px solid var(--line)', borderRadius: 8, padding: '6px 10px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}
+                    >
+                      <X size={12} />
                     </button>
                   </div>
                 </div>
@@ -2447,9 +2622,25 @@ function AvailabilityRow({ entry, onDelete }: { entry: Availability; onDelete: (
   )
 }
 
-function AddAvailabilityForm({ personId, onSaved, onCancel }: { personId: string; onSaved: () => void; onCancel: () => void }) {
-  const [startDate, setStartDate] = useState(todayISO())
-  const [endDate, setEndDate] = useState(todayISO())
+function AddAvailabilityForm({
+  personId,
+  initialStartDate,
+  initialEndDate,
+  onSaved,
+  onCancel,
+}: {
+  personId: string
+  // Planner's "Not available" follow-up defaults this to the requirement's
+  // own dates rather than today, since the whole point there is "mark them
+  // unavailable for (at least) the dates just declined" — still editable,
+  // just a different starting point than the Crew-tab call site.
+  initialStartDate?: string
+  initialEndDate?: string
+  onSaved: () => void
+  onCancel: () => void
+}) {
+  const [startDate, setStartDate] = useState(initialStartDate ?? todayISO())
+  const [endDate, setEndDate] = useState(initialEndDate ?? todayISO())
   const [status, setStatus] = useState<AvailabilityStatus>('unavailable')
   const [type, setType] = useState<AvailabilityType | ''>('')
   const [notes, setNotes] = useState('')

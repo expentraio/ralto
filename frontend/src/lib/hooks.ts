@@ -258,6 +258,22 @@ export function useBookingsForRequirement(requirementId: string | undefined) {
   return { data, loading, reload }
 }
 
+// listBookingsForRequirement — a plain (non-hook) fetch for callers that
+// need bookings for several requirements at once (Jobs' per-role names, and
+// job-level "Confirm everyone"), where calling a hook in a loop isn't an
+// option.
+export function listBookingsForRequirement(requirementId: string) {
+  return api.get<Booking[]>(`/job-requirements/${requirementId}/bookings`)
+}
+
+export function cancelBooking(id: string) {
+  return api.post<Booking>(`/bookings/${id}/cancel`)
+}
+
+export function confirmBooking(id: string) {
+  return api.post<Booking>(`/bookings/${id}/confirm`)
+}
+
 export function useAvailability(personId: string | undefined) {
   const [data, setData] = useState<Availability[]>([])
   const [loading, setLoading] = useState(true)
@@ -364,15 +380,19 @@ export function invitePerson(personId: string) {
   return api.post<{ temporary_password: string }>(`/people/${personId}/invite-to-crew-app`)
 }
 
+// offerBooking creates a booking against a requirement — 'declined' covers
+// the phone-call "Not available" action in Planner (a no recorded straight
+// from the call, no digital offer ever sent), alongside the original
+// 'offered'/'pencilled' starting states.
 export function offerBooking(
   requirementId: string,
   personId: string,
   startDate: string,
   endDate: string,
   callTime?: string,
-  status: 'offered' | 'pencilled' = 'offered',
+  status: 'offered' | 'pencilled' | 'declined' = 'offered',
 ) {
-  return api.post(`/job-requirements/${requirementId}/bookings`, {
+  return api.post<Booking>(`/job-requirements/${requirementId}/bookings`, {
     person_id: personId,
     start_date: startDate,
     end_date: endDate,
