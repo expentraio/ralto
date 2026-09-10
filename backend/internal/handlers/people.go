@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"os"
 
@@ -234,6 +235,7 @@ func (a *API) AddPersonRole(w http.ResponseWriter, r *http.Request) {
 		personID, req.RoleID, req.IsPrimary, currentOrgID,
 	).Scan(&pr.ID, &pr.PersonID, &pr.RoleID, &pr.IsPrimary)
 	if err != nil {
+		log.Printf("AddPersonRole: %v", err)
 		writeError(w, http.StatusBadRequest, "failed to add person role")
 		return
 	}
