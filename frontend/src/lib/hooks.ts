@@ -7,12 +7,16 @@ import type {
   Booking,
   CandidateGroups,
   Client,
+  EmploymentType,
   Job,
   JobCommitment,
   JobRequirementWithCounts,
   JobStatus,
   OperationalAlert,
   Person,
+  PersonRole,
+  PersonStatus,
+  PreferredStatus,
   Project,
   ProspectiveEvent,
   ResourceCalendarResponse,
@@ -240,6 +244,77 @@ export function deleteAvailability(personId: string, availabilityId: string) {
 
 export function resolveAlert(id: string) {
   return api.post(`/alerts/${id}/resolve`)
+}
+
+// PersonWriteInput matches personWriteRequest in backend/internal/handlers/people.go
+// field for field — CreatePerson and UpdatePerson both take this exact shape,
+// and UpdatePerson overwrites every one of these columns (no partial-patch
+// semantics), so an edit must round-trip fields it doesn't expose in its own
+// form (overtime_rule_id, phone_number, notification_channels) rather than
+// omitting them and silently wiping them.
+export interface PersonWriteInput {
+  first_name: string
+  last_name: string
+  email: string
+  phone?: string
+  base_location?: string
+  employment_type: EmploymentType
+  status?: PersonStatus
+  preferred_status?: PreferredStatus
+  standard_rate?: number
+  rate_currency?: string
+  overtime_rule_id?: string
+  notes?: string
+  phone_number?: string
+  notification_channels?: string
+}
+
+export function createPerson(input: PersonWriteInput) {
+  return api.post<Person>('/people', input)
+}
+
+export function updatePerson(id: string, input: PersonWriteInput) {
+  return api.put<Person>(`/people/${id}`, input)
+}
+
+export function deletePerson(id: string) {
+  return api.delete<{ ok: boolean }>(`/people/${id}`)
+}
+
+export function usePersonRoles(personId: string | undefined) {
+  const [data, setData] = useState<PersonRole[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const reload = useCallback(() => {
+    if (!personId) return Promise.resolve()
+    setLoading(true)
+    return api
+      .get<PersonRole[]>(`/people/${personId}/roles`)
+      .then(setData)
+      .finally(() => setLoading(false))
+  }, [personId])
+
+  useEffect(() => {
+    reload()
+  }, [reload])
+
+  return { data, loading, reload }
+}
+
+export function addPersonRole(personId: string, input: { role_id: string; is_primary: boolean }) {
+  return api.post<PersonRole>(`/people/${personId}/roles`, input)
+}
+
+export function removePersonRole(personId: string, personRoleId: string) {
+  return api.delete<{ ok: boolean }>(`/people/${personId}/roles/${personRoleId}`)
+}
+
+// invitePerson enables crew-app login for an existing Person — the returned
+// temporary_password is one-shot, exactly like cmd/seed's password prompt:
+// it comes back in this response body only and can't be retrieved again
+// afterward, so callers must show it once and never log or persist it.
+export function invitePerson(personId: string) {
+  return api.post<{ temporary_password: string }>(`/people/${personId}/invite-to-crew-app`)
 }
 
 export function offerBooking(

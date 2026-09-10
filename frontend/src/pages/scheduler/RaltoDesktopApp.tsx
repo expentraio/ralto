@@ -27,8 +27,11 @@ import {
   Rows3,
   X,
   AlertOctagon,
+  Pencil,
+  UserX,
+  KeyRound,
 } from 'lucide-react'
-import { api } from '../../lib/api'
+import { api, ApiError } from '../../lib/api'
 import { useStaffAuth } from '../../context/StaffAuthContext'
 import {
   useAlerts,
@@ -53,7 +56,15 @@ import {
   indexById,
   resolveAlert,
   offerBooking,
+  createPerson,
+  updatePerson,
+  deletePerson,
+  usePersonRoles,
+  addPersonRole,
+  removePersonRole,
+  invitePerson,
   type JobSummary,
+  type PersonWriteInput,
 } from '../../lib/hooks'
 import type {
   AlreadyAskedEntry,
@@ -61,12 +72,15 @@ import type {
   AvailabilityStatus,
   AvailabilityType,
   Client,
+  EmploymentType,
   Job,
   JobCommitment,
   JobContact,
   JobRequirementWithCounts,
   OperationalAlert,
   Person,
+  PersonRole,
+  PreferredStatus,
   Project,
   ProspectiveEvent,
   ResourceCalendarBooking,
@@ -2096,6 +2110,199 @@ const CREW_FILTERS = [
   { key: 'freelancer', label: 'Freelancer' },
 ] as const
 
+// personToWriteInput — UpdatePerson overwrites every column in
+// personWriteRequest, not just the ones a particular action means to
+// change, so any partial write (toggling status, editing just the rate)
+// has to start from the person's current values or it'll silently null out
+// fields the calling UI doesn't expose (overtime_rule_id, phone_number,
+// notification_channels).
+function personToWriteInput(p: Person): PersonWriteInput {
+  return {
+    first_name: p.first_name,
+    last_name: p.last_name,
+    email: p.email,
+    phone: p.phone,
+    base_location: p.base_location,
+    employment_type: p.employment_type,
+    status: p.status,
+    preferred_status: p.preferred_status,
+    standard_rate: p.standard_rate,
+    rate_currency: p.rate_currency,
+    overtime_rule_id: p.overtime_rule_id,
+    notes: p.notes,
+    phone_number: p.phone_number,
+    notification_channels: p.notification_channels,
+  }
+}
+
+// PersonForm — shared by "New crew member" (person undefined) and Edit
+// (person set). CreatePerson doesn't take a role itself; a selected primary
+// role is attached as a separate person_roles row after the person exists,
+// same create-parent-then-children order JobCreateForm uses for
+// requirements/contacts. Primary role only applies at creation — editing an
+// existing person manages roles via the Roles tab instead (add/remove
+// secondary roles), so that selector is hidden once a person is passed in.
+function PersonForm({
+  person,
+  roles,
+  onCancel,
+  onSaved,
+}: {
+  person?: Person
+  roles: Role[]
+  onCancel: () => void
+  onSaved: (person: Person) => void
+}) {
+  const [firstName, setFirstName] = useState(person?.first_name ?? '')
+  const [lastName, setLastName] = useState(person?.last_name ?? '')
+  const [email, setEmail] = useState(person?.email ?? '')
+  const [phone, setPhone] = useState(person?.phone ?? '')
+  const [baseLocation, setBaseLocation] = useState(person?.base_location ?? '')
+  const [employmentType, setEmploymentType] = useState<EmploymentType>(person?.employment_type ?? 'freelancer')
+  const [preferredStatus, setPreferredStatus] = useState<PreferredStatus>(person?.preferred_status ?? 'standard')
+  const [standardRate, setStandardRate] = useState(person?.standard_rate != null ? String(person.standard_rate) : '')
+  const [rateCurrency, setRateCurrency] = useState(person?.rate_currency ?? '')
+  const [notes, setNotes] = useState(person?.notes ?? '')
+  const [roleId, setRoleId] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | undefined>(undefined)
+
+  const inputStyle = { border: '1px solid var(--line)', borderRadius: 8, padding: '8px 10px', fontFamily: 'var(--font)', fontSize: 13, color: 'var(--ink)', background: '#fff', width: '100%', boxSizing: 'border-box' as const }
+  const labelStyle = { display: 'flex', flexDirection: 'column' as const, gap: 4, fontFamily: 'var(--font)', fontSize: 11.5, color: 'var(--ink-muted)' }
+
+  async function submit() {
+    setError(undefined)
+    if (!firstName || !lastName || !email) {
+      setError('First name, last name, and email are required.')
+      return
+    }
+
+    setSaving(true)
+    try {
+      const base = person ? personToWriteInput(person) : undefined
+      const payload: PersonWriteInput = {
+        ...base,
+        first_name: firstName,
+        last_name: lastName,
+        email,
+        phone: phone || undefined,
+        base_location: baseLocation || undefined,
+        employment_type: employmentType,
+        preferred_status: preferredStatus,
+        standard_rate: standardRate ? Number(standardRate) : undefined,
+        rate_currency: rateCurrency || undefined,
+        notes: notes || undefined,
+      }
+      const saved = person ? await updatePerson(person.id, payload) : await createPerson(payload)
+      if (!person && roleId) {
+        await addPersonRole(saved.id, { role_id: roleId, is_primary: true })
+      }
+      onSaved(saved)
+    } catch {
+      setError('Could not save that crew member — check the fields and try again.')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{ flex: 1, overflowY: 'auto', padding: '24px 32px' }}>
+      <div style={{ fontFamily: 'var(--font)', fontWeight: 700, fontSize: 22, color: 'var(--ink)', marginBottom: 16 }}>{person ? 'Edit crew member' : 'New crew member'}</div>
+
+      <div style={{ maxWidth: 640, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', gap: 14 }}>
+          <label style={{ ...labelStyle, flex: 1 }}>
+            First name
+            <input value={firstName} onChange={(e) => setFirstName(e.target.value)} style={inputStyle} />
+          </label>
+          <label style={{ ...labelStyle, flex: 1 }}>
+            Last name
+            <input value={lastName} onChange={(e) => setLastName(e.target.value)} style={inputStyle} />
+          </label>
+        </div>
+
+        <div style={{ display: 'flex', gap: 14 }}>
+          <label style={{ ...labelStyle, flex: 1 }}>
+            Email
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} style={inputStyle} />
+          </label>
+          <label style={{ ...labelStyle, flex: 1 }}>
+            Phone
+            <input value={phone} onChange={(e) => setPhone(e.target.value)} style={inputStyle} />
+          </label>
+        </div>
+
+        <div style={{ display: 'flex', gap: 14 }}>
+          <label style={{ ...labelStyle, flex: 1 }}>
+            Base location
+            <input value={baseLocation} onChange={(e) => setBaseLocation(e.target.value)} placeholder="e.g. London" style={inputStyle} />
+          </label>
+          <label style={{ ...labelStyle, flex: 1 }}>
+            Employment type
+            <select value={employmentType} onChange={(e) => setEmploymentType(e.target.value as EmploymentType)} style={inputStyle}>
+              <option value="freelancer">Freelancer</option>
+              <option value="staff">Staff</option>
+            </select>
+          </label>
+        </div>
+
+        <div style={{ display: 'flex', gap: 14 }}>
+          <label style={{ ...labelStyle, flex: 1.2 }}>
+            Preferred status
+            <select value={preferredStatus} onChange={(e) => setPreferredStatus(e.target.value as PreferredStatus)} style={inputStyle}>
+              <option value="preferred">Preferred</option>
+              <option value="approved">Approved</option>
+              <option value="standard">Standard</option>
+              <option value="restricted">Restricted</option>
+            </select>
+          </label>
+          <label style={{ ...labelStyle, flex: 1 }}>
+            Standard rate
+            <input type="number" min={0} value={standardRate} onChange={(e) => setStandardRate(e.target.value)} style={inputStyle} />
+          </label>
+          <label style={{ ...labelStyle, flex: 0.7 }}>
+            Currency
+            <input value={rateCurrency} onChange={(e) => setRateCurrency(e.target.value.toUpperCase())} placeholder="GBP" style={inputStyle} />
+          </label>
+        </div>
+
+        {!person && (
+          <label style={labelStyle}>
+            Primary role (optional)
+            <select value={roleId} onChange={(e) => setRoleId(e.target.value)} style={inputStyle}>
+              <option value="">No role yet</option>
+              {roles.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
+        <label style={labelStyle}>
+          Notes (optional)
+          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} style={{ ...inputStyle, resize: 'vertical', fontFamily: 'var(--font)' }} />
+        </label>
+
+        {error && <div style={{ fontFamily: 'var(--font)', fontSize: 12.5, color: 'var(--danger)' }}>{error}</div>}
+
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <button onClick={onCancel} style={{ border: '1px solid var(--line)', background: '#fff', borderRadius: 8, padding: '9px 16px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 13, cursor: 'pointer', color: 'var(--ink-muted)' }}>
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={saving}
+            style={{ border: 'none', background: 'var(--primary)', color: '#fff', borderRadius: 8, padding: '9px 18px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 13, cursor: 'pointer', opacity: saving ? 0.7 : 1 }}
+          >
+            {saving ? 'Saving…' : person ? 'Save changes' : 'Create crew member'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function PersonCard({ person, onClick }: { person: Person; onClick: () => void }) {
   return (
     <button
@@ -2117,8 +2324,8 @@ function PersonCard({ person, onClick }: { person: Person; onClick: () => void }
             </div>
           )}
         </div>
-        <span style={{ flexShrink: 0, fontFamily: 'var(--font)', fontWeight: 600, fontSize: 11, padding: '4px 9px', borderRadius: 999, color: person.active ? 'var(--success)' : 'var(--ink-muted)', background: person.active ? 'var(--success-bg)' : 'var(--track)' }}>
-          {person.active ? 'Active' : 'Inactive'}
+        <span style={{ flexShrink: 0, fontFamily: 'var(--font)', fontWeight: 600, fontSize: 11, padding: '4px 9px', borderRadius: 999, color: person.status === 'active' ? 'var(--success)' : 'var(--ink-muted)', background: person.status === 'active' ? 'var(--success-bg)' : 'var(--track)' }}>
+          {person.status === 'active' ? 'Active' : 'Inactive'}
         </span>
       </div>
     </button>
@@ -2297,14 +2504,189 @@ function PersonAvailabilityTab({ person }: { person: Person }) {
   )
 }
 
-type PersonTabKey = 'availability'
-const PERSON_TABS: { key: PersonTabKey; label: string }[] = [{ key: 'availability', label: 'Availability' }]
+type PersonTabKey = 'availability' | 'roles'
+const PERSON_TABS: { key: PersonTabKey; label: string }[] = [
+  { key: 'availability', label: 'Availability' },
+  { key: 'roles', label: 'Roles' },
+]
 
-function PersonDetail({ person, onBack }: { person: Person; onBack: () => void }) {
+function PersonRolesTab({
+  person,
+  roles,
+  personRoles,
+  loading,
+  reload,
+}: {
+  person: Person
+  roles: Role[]
+  personRoles: PersonRole[]
+  loading: boolean
+  reload: () => void
+}) {
+  const [addingRoleId, setAddingRoleId] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | undefined>(undefined)
+
+  const inputStyle = { border: '1px solid var(--line)', borderRadius: 8, padding: '7px 10px', fontFamily: 'var(--font)', fontSize: 13, color: 'var(--ink)', background: '#fff' }
+  const availableRoles = roles.filter((r) => !personRoles.some((pr) => pr.role_id === r.id))
+
+  async function addRole() {
+    if (!addingRoleId) return
+    setSaving(true)
+    setError(undefined)
+    try {
+      // Roles added here are always secondary — the one role a person can
+      // create with is_primary set is chosen at creation time (PersonForm);
+      // changing which role is primary afterward is explicitly out of scope.
+      await addPersonRole(person.id, { role_id: addingRoleId, is_primary: false })
+      setAddingRoleId('')
+      reload()
+    } catch {
+      setError('Could not add that role.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function removeRole(pr: PersonRole) {
+    await removePersonRole(person.id, pr.id)
+    reload()
+  }
+
+  return (
+    <div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
+        {personRoles.map((pr) => (
+          <div key={pr.id} style={{ display: 'flex', alignItems: 'center', gap: 10, border: '1px solid var(--line)', borderRadius: 10, padding: '10px 14px', background: '#fff' }}>
+            <span style={{ fontFamily: 'var(--font)', fontWeight: 600, fontSize: 13.5, color: 'var(--ink)', flex: 1 }}>{pr.role_name}</span>
+            {pr.is_primary && (
+              <span style={{ fontFamily: 'var(--font)', fontWeight: 600, fontSize: 11, padding: '3px 9px', borderRadius: 999, color: 'var(--primary)', background: 'var(--primary-tint)' }}>Primary</span>
+            )}
+            <button onClick={() => removeRole(pr)} title="Remove role" style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 4, color: 'var(--ink-muted)' }}>
+              <Trash2 size={14} />
+            </button>
+          </div>
+        ))}
+        {!loading && personRoles.length === 0 && <div style={{ fontFamily: 'var(--font)', fontSize: 13, color: 'var(--ink-muted)', padding: '12px 0' }}>No roles assigned yet.</div>}
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <select value={addingRoleId} onChange={(e) => setAddingRoleId(e.target.value)} style={{ ...inputStyle, flex: 1 }}>
+          <option value="">Add a role…</option>
+          {availableRoles.map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.name}
+            </option>
+          ))}
+        </select>
+        <button
+          onClick={addRole}
+          disabled={!addingRoleId || saving}
+          style={{ border: 'none', background: 'var(--primary)', color: '#fff', borderRadius: 8, padding: '7px 14px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12.5, cursor: 'pointer', opacity: !addingRoleId || saving ? 0.6 : 1 }}
+        >
+          Add
+        </button>
+      </div>
+      {error && <div style={{ fontFamily: 'var(--font)', fontSize: 12, color: 'var(--danger)', marginTop: 8 }}>{error}</div>}
+    </div>
+  )
+}
+
+// TempPasswordModal — the temporary password is only ever available in the
+// InviteToCrewApp response body; there is no endpoint to fetch it again
+// afterward, so this is the one place it's ever rendered. Nothing here
+// stores it beyond this component's own state, and dismissing throws it
+// away for good.
+function TempPasswordModal({ password, onDismiss }: { password: string; onDismiss: () => void }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
+      <div style={{ background: '#fff', borderRadius: 14, padding: 24, width: 380, boxShadow: '0 20px 50px rgba(0,0,0,0.25)' }}>
+        <div style={{ fontFamily: 'var(--font)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', marginBottom: 6 }}>App access granted</div>
+        <div style={{ fontFamily: 'var(--font)', fontSize: 12.5, color: 'var(--ink-muted)', marginBottom: 14 }}>
+          Share this temporary password with them directly. It won't be shown again — if it's lost, grant access again to generate a new one.
+        </div>
+        <div style={{ fontFamily: 'monospace', fontSize: 18, fontWeight: 700, color: 'var(--ink)', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 8, padding: '12px 14px', textAlign: 'center', letterSpacing: 1, marginBottom: 16 }}>
+          {password}
+        </div>
+        <button
+          onClick={onDismiss}
+          style={{ width: '100%', border: 'none', background: 'var(--primary)', color: '#fff', borderRadius: 8, padding: '10px 0', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}
+        >
+          I've saved it — done
+        </button>
+      </div>
+    </div>
+  )
+}
+
+type DeleteState = 'idle' | 'confirming' | 'blocked'
+
+function PersonDetail({ person, roles, onBack, reloadPeople }: { person: Person; roles: Role[]; onBack: () => void; reloadPeople: () => void }) {
   const [tab, setTab] = useState<PersonTabKey>('availability')
+  const [editing, setEditing] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [deleteState, setDeleteState] = useState<DeleteState>('idle')
+  const [inviting, setInviting] = useState(false)
+  const [tempPassword, setTempPassword] = useState<string | undefined>(undefined)
+  const { data: personRoles, loading: rolesLoading, reload: reloadPersonRoles } = usePersonRoles(person.id)
+
+  const primaryRole = personRoles.find((pr) => pr.is_primary)
+
+  async function toggleActive() {
+    setBusy(true)
+    try {
+      await updatePerson(person.id, { ...personToWriteInput(person), status: person.status === 'active' ? 'inactive' : 'active' })
+      reloadPeople()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function confirmDelete() {
+    setBusy(true)
+    try {
+      await deletePerson(person.id)
+      reloadPeople()
+      onBack()
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        setDeleteState('blocked')
+      } else {
+        setDeleteState('idle')
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function grantAccess() {
+    setInviting(true)
+    try {
+      const { temporary_password } = await invitePerson(person.id)
+      setTempPassword(temporary_password)
+    } finally {
+      setInviting(false)
+    }
+  }
+
+  if (editing) {
+    return (
+      <PersonForm
+        person={person}
+        roles={roles}
+        onCancel={() => setEditing(false)}
+        onSaved={() => {
+          setEditing(false)
+          reloadPeople()
+        }}
+      />
+    )
+  }
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '24px 32px' }}>
+      {tempPassword && <TempPasswordModal password={tempPassword} onDismiss={() => setTempPassword(undefined)} />}
+
       <button
         onClick={onBack}
         style={{ display: 'flex', alignItems: 'center', gap: 4, border: 'none', background: 'none', cursor: 'pointer', padding: 0, marginBottom: 16, fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12.5, color: 'var(--ink-muted)' }}
@@ -2319,14 +2701,80 @@ function PersonDetail({ person, onBack }: { person: Person; onBack: () => void }
           </span>
           {person.preferred_status === 'preferred' && <Star size={14} color="var(--primary)" fill="var(--primary)" />}
         </div>
-        <span style={{ fontFamily: 'var(--font)', fontWeight: 600, fontSize: 11, padding: '4px 9px', borderRadius: 999, color: person.active ? 'var(--success)' : 'var(--ink-muted)', background: person.active ? 'var(--success-bg)' : 'var(--track)' }}>
-          {person.active ? 'Active' : 'Inactive'}
+        <span style={{ fontFamily: 'var(--font)', fontWeight: 600, fontSize: 11, padding: '4px 9px', borderRadius: 999, color: person.status === 'active' ? 'var(--success)' : 'var(--ink-muted)', background: person.status === 'active' ? 'var(--success-bg)' : 'var(--track)' }}>
+          {person.status === 'active' ? 'Active' : 'Inactive'}
         </span>
       </div>
-      <div style={{ fontFamily: 'var(--font)', fontSize: 13, color: 'var(--ink-muted)', textTransform: 'capitalize', marginBottom: 18 }}>
-        {person.employment_type}
+      <div style={{ fontFamily: 'var(--font)', fontSize: 13, color: 'var(--ink-muted)', marginBottom: 18 }}>
+        {primaryRole && <span>{primaryRole.role_name} · </span>}
+        <span style={{ textTransform: 'capitalize' }}>{person.employment_type}</span>
         {person.base_location ? ` · ${person.base_location}` : ''}
       </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
+        <button
+          onClick={() => setEditing(true)}
+          style={{ display: 'flex', alignItems: 'center', gap: 5, border: '1px solid var(--line)', background: '#fff', color: 'var(--ink)', borderRadius: 8, padding: '7px 14px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12.5, cursor: 'pointer' }}
+        >
+          <Pencil size={13} /> Edit
+        </button>
+        <button
+          onClick={toggleActive}
+          disabled={busy}
+          style={{ display: 'flex', alignItems: 'center', gap: 5, border: 'none', background: person.status === 'active' ? 'var(--danger)' : 'var(--primary)', color: '#fff', borderRadius: 8, padding: '7px 14px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12.5, cursor: 'pointer', opacity: busy ? 0.7 : 1 }}
+        >
+          <UserX size={13} /> {person.status === 'active' ? 'Deactivate' : 'Reactivate'}
+        </button>
+        <button
+          onClick={grantAccess}
+          disabled={inviting}
+          title="Generates a new temporary password each time"
+          style={{ display: 'flex', alignItems: 'center', gap: 5, border: '1px solid var(--line)', background: '#fff', color: 'var(--ink)', borderRadius: 8, padding: '7px 14px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12.5, cursor: 'pointer', opacity: inviting ? 0.7 : 1 }}
+        >
+          <KeyRound size={13} /> {inviting ? 'Granting…' : 'Grant app access'}
+        </button>
+      </div>
+
+      {deleteState === 'idle' && (
+        <button
+          onClick={() => setDeleteState('confirming')}
+          style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 0, marginBottom: 18, fontFamily: 'var(--font)', fontWeight: 600, fontSize: 11.5, color: 'var(--ink-muted)', textDecoration: 'underline' }}
+        >
+          Delete this record
+        </button>
+      )}
+      {deleteState === 'confirming' && (
+        <div style={{ border: '1px solid var(--danger)', background: 'var(--danger-bg)', borderRadius: 10, padding: 12, display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
+          <div style={{ fontFamily: 'var(--font)', fontSize: 12.5, color: 'var(--ink)' }}>
+            Delete {person.first_name} {person.last_name}? This can't be undone — use Deactivate instead if they might return.
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => setDeleteState('idle')} style={{ border: '1px solid var(--line)', background: '#fff', borderRadius: 8, padding: '6px 12px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12, cursor: 'pointer', color: 'var(--ink-muted)' }}>
+              Cancel
+            </button>
+            <button
+              onClick={confirmDelete}
+              disabled={busy}
+              style={{ border: 'none', background: 'var(--danger)', color: '#fff', borderRadius: 8, padding: '6px 12px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12, cursor: 'pointer', opacity: busy ? 0.7 : 1 }}
+            >
+              Yes, delete
+            </button>
+          </div>
+        </div>
+      )}
+      {deleteState === 'blocked' && (
+        <div style={{ border: '1px solid var(--danger)', background: 'var(--danger-bg)', borderRadius: 10, padding: 12, display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
+          <div style={{ fontFamily: 'var(--font)', fontSize: 12.5, color: 'var(--ink)' }}>
+            {person.first_name} has booking history, so they can't be deleted — deactivate them instead to keep that history intact.
+          </div>
+          <button
+            onClick={() => setDeleteState('idle')}
+            style={{ alignSelf: 'flex-start', border: '1px solid var(--line)', background: '#fff', borderRadius: 8, padding: '6px 12px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12, cursor: 'pointer', color: 'var(--ink-muted)' }}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--line)', marginBottom: 18 }}>
         {PERSON_TABS.map((t) => (
@@ -2352,14 +2800,16 @@ function PersonDetail({ person, onBack }: { person: Person; onBack: () => void }
       </div>
 
       {tab === 'availability' && <PersonAvailabilityTab person={person} />}
+      {tab === 'roles' && <PersonRolesTab person={person} roles={roles} personRoles={personRoles} loading={rolesLoading} reload={reloadPersonRoles} />}
     </div>
   )
 }
 
-function CrewContent({ people }: { people: Person[] }) {
+function CrewContent({ people, roles, reloadPeople }: { people: Person[]; roles: Role[]; reloadPeople: () => void }) {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<(typeof CREW_FILTERS)[number]['key']>('all')
   const [selectedPersonId, setSelectedPersonId] = useState<string | undefined>(undefined)
+  const [creating, setCreating] = useState(false)
 
   const filtered = useMemo(() => {
     let list = people.filter((p) => `${p.first_name} ${p.last_name}`.toLowerCase().includes(query.toLowerCase()))
@@ -2368,18 +2818,40 @@ function CrewContent({ people }: { people: Person[] }) {
     return list
   }, [people, query, filter])
 
+  if (creating) {
+    return (
+      <PersonForm
+        roles={roles}
+        onCancel={() => setCreating(false)}
+        onSaved={(p) => {
+          setCreating(false)
+          reloadPeople()
+          setSelectedPersonId(p.id)
+        }}
+      />
+    )
+  }
+
   const selectedPerson = people.find((p) => p.id === selectedPersonId)
   if (selectedPerson) {
-    return <PersonDetail person={selectedPerson} onBack={() => setSelectedPersonId(undefined)} />
+    return <PersonDetail person={selectedPerson} roles={roles} onBack={() => setSelectedPersonId(undefined)} reloadPeople={reloadPeople} />
   }
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '24px 32px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
         <div style={{ fontFamily: 'var(--font)', fontWeight: 700, fontSize: 24, color: 'var(--ink)' }}>Crew</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, border: '1px solid var(--line)', borderRadius: 10, padding: '8px 12px', background: '#fff', width: 260 }}>
-          <Search size={15} color="var(--ink-muted)" />
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name" style={{ border: 'none', outline: 'none', background: 'none', fontFamily: 'var(--font)', fontSize: 13.5, color: 'var(--ink)', flex: 1 }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, border: '1px solid var(--line)', borderRadius: 10, padding: '8px 12px', background: '#fff', width: 260 }}>
+            <Search size={15} color="var(--ink-muted)" />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name" style={{ border: 'none', outline: 'none', background: 'none', fontFamily: 'var(--font)', fontSize: 13.5, color: 'var(--ink)', flex: 1 }} />
+          </div>
+          <button
+            onClick={() => setCreating(true)}
+            style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 14px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap' }}
+          >
+            <UserPlus size={14} /> New crew member
+          </button>
         </div>
       </div>
 
@@ -2485,7 +2957,7 @@ export function RaltoDesktopApp() {
   const { data: venuesList } = useVenues()
   const { data: projectsList } = useProjects()
   const { data: rolesList } = useRoles()
-  const { data: people } = usePeople()
+  const { data: people, reload: reloadPeople } = usePeople()
   const { data: alerts, reload: reloadAlerts } = useAlerts()
 
   const clients = useMemo(() => indexById(clientsList), [clientsList])
@@ -2587,7 +3059,7 @@ export function RaltoDesktopApp() {
                 onConsumedTarget={() => setPlannerTargetReqId(undefined)}
               />
             )}
-            {active === 'crew' && <CrewContent people={people} />}
+            {active === 'crew' && <CrewContent people={people} roles={rolesList} reloadPeople={reloadPeople} />}
           </>
         )}
       </div>

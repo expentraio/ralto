@@ -30,6 +30,7 @@ export interface Person {
   preferred_status: PreferredStatus
   standard_rate?: number
   rate_currency?: string
+  overtime_rule_id?: string
   notes?: string
   phone_number?: string
   notification_channels?: string
@@ -37,6 +38,17 @@ export interface Person {
   must_change_password: boolean
   created_at: string
   updated_at: string
+}
+
+// A Role a Person can be booked into (person_roles) — is_primary marks the
+// one set at creation; ListPersonRoles/AddPersonRole/RemovePersonRole allow
+// any number of additional (secondary) roles beyond it.
+export interface PersonRole {
+  id: string
+  person_id: string
+  role_id: string
+  is_primary: boolean
+  role_name: string
 }
 
 export interface Client {
