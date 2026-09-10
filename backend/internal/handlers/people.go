@@ -79,6 +79,20 @@ type personWriteRequest struct {
 	NotificationChannels *string                `json:"notification_channels"`
 }
 
+// nilIfEmpty treats a *string pointing at "" the same as an absent key —
+// overtime_rule_id is the one optional field here backed by a UUID column
+// rather than TEXT, so an explicit "" (vs. the key being omitted entirely)
+// reaches Postgres as `invalid input syntax for type uuid: ""` instead of
+// NULL. The other *string fields (phone, notes, etc.) are plain TEXT
+// columns where "" is a legitimate value, so this is deliberately scoped
+// to just this field rather than applied to the whole struct.
+func nilIfEmpty(s *string) *string {
+	if s != nil && *s == "" {
+		return nil
+	}
+	return s
+}
+
 func (a *API) CreatePerson(w http.ResponseWriter, r *http.Request) {
 	var req personWriteRequest
 	if err := readJSON(r, &req); err != nil {
@@ -92,6 +106,7 @@ func (a *API) CreatePerson(w http.ResponseWriter, r *http.Request) {
 		req.PreferredStatus = models.PreferredStatusStandard
 	}
 	req.Email = normalizeEmail(req.Email)
+	req.OvertimeRuleID = nilIfEmpty(req.OvertimeRuleID)
 	var p models.Person
 	err := scanPerson(a.DB.QueryRow(r.Context(),
 		`INSERT INTO people (first_name, last_name, email, phone, base_location, employment_type, status,
@@ -118,6 +133,7 @@ func (a *API) UpdatePerson(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Email = normalizeEmail(req.Email)
+	req.OvertimeRuleID = nilIfEmpty(req.OvertimeRuleID)
 	var p models.Person
 	err := scanPerson(a.DB.QueryRow(r.Context(),
 		`UPDATE people SET first_name = $1, last_name = $2, email = $3, phone = $4, base_location = $5,
