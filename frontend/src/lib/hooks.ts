@@ -22,6 +22,7 @@ import type {
   ProspectiveEvent,
   ResourceCalendarResponse,
   Role,
+  ScheduleItHistory,
   Skill,
   SkillType,
   Venue,
@@ -283,6 +284,29 @@ export function useAvailability(personId: string | undefined) {
     setLoading(true)
     return api
       .get<Availability[]>(`/people/${personId}/availability`)
+      .then(setData)
+      .finally(() => setLoading(false))
+  }, [personId])
+
+  useEffect(() => {
+    reload()
+  }, [reload])
+
+  return { data, loading, reload }
+}
+
+// Read-only — scheduleit_history is only ever written by the one-shot
+// import script, never through the API, so there's no create/delete
+// wrapper to go with this the way Availability has.
+export function useScheduleItHistory(personId: string | undefined) {
+  const [data, setData] = useState<ScheduleItHistory[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const reload = useCallback(() => {
+    if (!personId) return Promise.resolve()
+    setLoading(true)
+    return api
+      .get<ScheduleItHistory[]>(`/people/${personId}/scheduleit-history`)
       .then(setData)
       .finally(() => setLoading(false))
   }, [personId])

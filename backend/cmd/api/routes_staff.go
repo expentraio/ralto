@@ -101,6 +101,7 @@ func registerStaffRoutes(r chi.Router, api *handlers.API) {
 			r.Delete("/{id}/availability/{availabilityId}", api.DeleteAvailability)
 			r.Post("/{id}/calendar-feed-token", api.GenerateCalendarFeedToken)
 			r.Post("/{id}/invite-to-crew-app", api.InviteToCrewApp)
+			r.Get("/{id}/scheduleit-history", api.ListScheduleItHistoryForPerson)
 		})
 
 		r.Route("/skills", func(r chi.Router) {

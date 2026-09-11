@@ -43,6 +43,7 @@ import {
   useAvailability,
   createAvailability,
   deleteAvailability,
+  useScheduleItHistory,
   useProspectiveEvents,
   createProspectiveEvent,
   dropProspectiveEvent,
@@ -103,6 +104,7 @@ import type {
   ResourceCalendarBooking,
   ResourceCalendarRow,
   Role,
+  ScheduleItHistory,
   Skill,
   SkillType,
   Venue,
@@ -2763,10 +2765,51 @@ function PersonAvailabilityTab({ person }: { person: Person }) {
   )
 }
 
-type PersonTabKey = 'availability' | 'roles'
+// ScheduleIt history — "was this person on site that day" lookups against
+// the archived ScheduleIt account. Read-only end to end: no add/edit/
+// delete here, matching the endpoint (only the one-shot import script ever
+// writes scheduleit_history).
+function ScheduleItHistoryRow({ entry }: { entry: ScheduleItHistory }) {
+  return (
+    <div style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '10px 14px', background: '#fff' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
+        <span style={{ fontFamily: 'var(--font)', fontWeight: 600, fontSize: 13.5, color: 'var(--ink)' }}>{entry.title}</span>
+        <span style={{ fontFamily: 'var(--font)', fontSize: 12, color: 'var(--ink-muted)', flexShrink: 0, whiteSpace: 'nowrap' }}>
+          {formatDate(entry.date_start)}
+          {entry.date_end && entry.date_end !== entry.date_start ? ` – ${formatDate(entry.date_end)}` : ''}
+        </span>
+      </div>
+      {entry.client_name && <div style={{ fontFamily: 'var(--font)', fontSize: 12.5, color: 'var(--ink-muted)', marginTop: 2 }}>{entry.client_name}</div>}
+      {entry.notes && <div style={{ fontFamily: 'var(--font)', fontSize: 12, color: 'var(--ink-muted)', marginTop: 4, whiteSpace: 'pre-wrap' }}>{entry.notes}</div>}
+    </div>
+  )
+}
+
+function PersonHistoryTab({ person }: { person: Person }) {
+  const { data: entries, loading } = useScheduleItHistory(person.id)
+
+  return (
+    <div>
+      <div style={{ fontFamily: 'var(--font)', fontWeight: 600, fontSize: 14, color: 'var(--ink-muted)', marginBottom: 12 }}>
+        ScheduleIt history
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {entries.map((entry) => (
+          <ScheduleItHistoryRow key={entry.id} entry={entry} />
+        ))}
+        {!loading && entries.length === 0 && (
+          <div style={{ fontFamily: 'var(--font)', fontSize: 13, color: 'var(--ink-muted)', padding: '12px 0' }}>No ScheduleIt history for this person.</div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+type PersonTabKey = 'availability' | 'roles' | 'history'
 const PERSON_TABS: { key: PersonTabKey; label: string }[] = [
   { key: 'availability', label: 'Availability' },
   { key: 'roles', label: 'Roles' },
+  { key: 'history', label: 'History' },
 ]
 
 function PersonRolesTab({
@@ -3060,6 +3103,7 @@ function PersonDetail({ person, roles, onBack, reloadPeople }: { person: Person;
 
       {tab === 'availability' && <PersonAvailabilityTab person={person} />}
       {tab === 'roles' && <PersonRolesTab person={person} roles={roles} personRoles={personRoles} loading={rolesLoading} reload={reloadPersonRoles} />}
+      {tab === 'history' && <PersonHistoryTab person={person} />}
     </div>
   )
 }

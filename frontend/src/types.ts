@@ -289,6 +289,21 @@ export interface Availability {
   notes?: string
 }
 
+// Read-only — every row comes from the one-shot ScheduleIt import script,
+// never created or edited through the app itself.
+export interface ScheduleItHistory {
+  id: string
+  person_id?: string
+  scheduleit_person_name: string
+  scheduleit_event_id: string
+  title: string
+  client_name?: string
+  date_start: string
+  date_end?: string
+  notes?: string
+  created_at: string
+}
+
 export interface PersonDocument {
   id: string
   person_id: string

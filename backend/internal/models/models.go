@@ -474,3 +474,22 @@ type OperationalAlert struct {
 	CreatedAt       time.Time   `json:"created_at"`
 	ResolvedAt      *time.Time  `json:"resolved_at,omitempty"`
 }
+
+// --- ScheduleItHistory ("was this person on site that day" archive) ---
+//
+// Read-only from the API's side — every row comes from the one-shot import
+// script (files/scheduleit_import.py), never created or edited through the
+// app itself.
+
+type ScheduleItHistory struct {
+	ID                   string    `json:"id"`
+	PersonID             *string   `json:"person_id,omitempty"`
+	ScheduleItPersonName string    `json:"scheduleit_person_name"`
+	ScheduleItEventID    string    `json:"scheduleit_event_id"`
+	Title                string    `json:"title"`
+	ClientName           *string   `json:"client_name,omitempty"`
+	DateStart            string    `json:"date_start"`
+	DateEnd              *string   `json:"date_end,omitempty"`
+	Notes                *string   `json:"notes,omitempty"`
+	CreatedAt            time.Time `json:"created_at"`
+}
