@@ -47,7 +47,7 @@ export function StaffChangePassword() {
   return (
     <div style={{ display: 'flex', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', background: '#E7E5E1', fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif' }}>
       <form onSubmit={handleSubmit} style={{ width: 340, background: '#fff', border: '1px solid #DCE3E7', borderRadius: 16, padding: 32, boxShadow: '0 20px 40px rgba(23,21,31,0.12)' }}>
-        <div style={{ fontWeight: 700, fontSize: 20, color: '#18232E', marginBottom: 4 }}>RALTO</div>
+        <div style={{ fontWeight: 700, fontSize: 20, color: '#18232E', marginBottom: 4 }}>Crewing</div>
         <div style={{ fontSize: 13, color: '#667085', marginBottom: 24 }}>Set a new password to continue</div>
 
         <label style={{ display: 'block', fontSize: 12.5, color: '#667085', marginBottom: 4 }}>Current (temporary) password</label>

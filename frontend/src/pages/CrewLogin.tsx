@@ -24,7 +24,7 @@ export function CrewLogin() {
   return (
     <div style={{ display: 'flex', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', background: '#F5F7F8', fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif', padding: 20 }}>
       <form onSubmit={handleSubmit} style={{ width: '100%', maxWidth: 340, background: '#fff', border: '1px solid #DCE3E7', borderRadius: 16, padding: 28 }}>
-        <div style={{ fontWeight: 700, fontSize: 20, color: '#18232E', marginBottom: 4 }}>RALTO</div>
+        <div style={{ fontWeight: 700, fontSize: 20, color: '#18232E', marginBottom: 4 }}>Crewing</div>
         <div style={{ fontSize: 13, color: '#667085', marginBottom: 24 }}>Crew sign in</div>
         <label style={{ display: 'block', fontSize: 12.5, color: '#667085', marginBottom: 4 }}>Email</label>
         <input

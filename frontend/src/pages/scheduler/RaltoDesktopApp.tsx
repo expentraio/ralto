@@ -182,7 +182,7 @@ function Sidebar({ active, onSelect, onOpenSuite }: { active: NavKey; onSelect: 
           <div style={{ width: 15, height: 4, borderRadius: 2, background: 'var(--primary)' }} />
           <div style={{ width: 10, height: 4, borderRadius: 2, background: 'var(--primary)' }} />
         </div>
-        <span style={{ fontFamily: 'var(--font)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', letterSpacing: 0.2 }}>RALTO</span>
+        <span style={{ fontFamily: 'var(--font)', fontWeight: 700, fontSize: 16, color: 'var(--ink)', letterSpacing: 0.2 }}>Crewing</span>
       </button>
       <div style={{ fontFamily: 'var(--font)', fontSize: 12, color: 'var(--ink-muted)', padding: '4px 8px 24px', lineHeight: 1.4 }}>Crewing, simplified.</div>
 
@@ -3770,7 +3770,7 @@ function SettingsContent({ roles, reloadRoles }: { roles: Role[]; reloadRoles: (
 const CORE_CAPABILITIES = ['Organisation', 'Users & permissions', 'Clients', 'Projects / Jobs', 'Locations', 'Shared identifiers', 'Integrations']
 
 const SUITE_PRODUCTS = [
-  { key: 'ralto', name: 'RALTO', tagline: 'Crewing, simplified.', color: '#453E96', available: true },
+  { key: 'ralto', name: 'Crewing', tagline: 'Crewing, simplified.', color: '#453E96', available: true },
   { key: 'equiptra', name: 'EQUIPTRA', tagline: 'Equipment management, simplified.', color: '#4F7693', available: false },
   { key: 'expentra', name: 'EXPENTRA', tagline: 'Business expenses, simplified.', color: '#4BA38B', available: false },
 ] as const
