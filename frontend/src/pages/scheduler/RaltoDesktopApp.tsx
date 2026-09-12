@@ -168,12 +168,17 @@ function CommitmentBadge({ job }: { job: Job }) {
 // Shared Sidebar
 // ---------------------------------------------------------------------------
 
-function Sidebar({ active, onSelect, onOpenSuite }: { active: NavKey; onSelect: (k: NavKey) => void; onOpenSuite: () => void }) {
+// Clicking the wordmark now takes you to the real Simplified Suite
+// (simplifiedsuite.io), not the old dark mockup screen (SuiteContent) that
+// used to live in this file — that screen's correct visual design has been
+// carried over to Core's own real Landing/admin screens instead, wired to
+// real data there, so this component has nothing left to open locally.
+function Sidebar({ active, onSelect }: { active: NavKey; onSelect: (k: NavKey) => void }) {
   const { logout } = useStaffAuth()
   return (
     <div style={{ width: 232, flexShrink: 0, background: '#fff', borderRight: '1px solid var(--line)', display: 'flex', flexDirection: 'column', padding: '24px 16px' }}>
       <button
-        onClick={onOpenSuite}
+        onClick={() => { window.location.href = 'https://simplifiedsuite.io' }}
         title="Open Simplified Suite"
         style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 8px', marginBottom: 4, background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}
       >
@@ -3762,72 +3767,11 @@ function SettingsContent({ roles, reloadRoles }: { roles: Role[]; reloadRoles: (
 }
 
 // ---------------------------------------------------------------------------
-// Suite — the "Simplified Suite" core landing view (unchanged from the
-// prototype — purely navigational, no live data of its own yet since no
-// suite-core service exists).
-// ---------------------------------------------------------------------------
-
-const CORE_CAPABILITIES = ['Organisation', 'Users & permissions', 'Clients', 'Projects / Jobs', 'Locations', 'Shared identifiers', 'Integrations']
-
-const SUITE_PRODUCTS = [
-  { key: 'ralto', name: 'Crewing', tagline: 'Crewing, simplified.', color: '#453E96', available: true },
-  { key: 'equiptra', name: 'EQUIPTRA', tagline: 'Equipment management, simplified.', color: '#4F7693', available: false },
-  { key: 'expentra', name: 'EXPENTRA', tagline: 'Business expenses, simplified.', color: '#4BA38B', available: false },
-] as const
-
-function SuiteMark({ color = '#fff' }: { color?: string }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-      <div style={{ width: 22, height: 4, borderRadius: 2, background: color }} />
-      <div style={{ width: 17, height: 4, borderRadius: 2, background: color }} />
-      <div style={{ width: 12, height: 4, borderRadius: 2, background: color }} />
-    </div>
-  )
-}
-
-function SuiteContent({ onEnterRalto }: { onEnterRalto: () => void }) {
-  return (
-    <div style={{ flex: 1, background: '#141E2A', overflowY: 'auto', padding: '32px 40px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>
-        <SuiteMark />
-        <span style={{ fontFamily: 'var(--font)', fontWeight: 700, fontSize: 20, color: '#fff', letterSpacing: 0.3 }}>SIMPLIFIED SUITE</span>
-      </div>
-      <div style={{ fontFamily: 'var(--font)', fontSize: 13.5, color: 'rgba(255,255,255,0.6)', marginBottom: 32 }}>Shared platform / neutral shell</div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 40, maxWidth: 720 }}>
-        {CORE_CAPABILITIES.map((c) => (
-          <div key={c} style={{ border: '1px solid rgba(255,255,255,0.14)', borderRadius: 10, padding: '12px 16px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 13, color: 'rgba(255,255,255,0.85)' }}>
-            {c}
-          </div>
-        ))}
-      </div>
-
-      <div style={{ fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12.5, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 14 }}>Your products</div>
-      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
-        {SUITE_PRODUCTS.map((p) => (
-          <button
-            key={p.key}
-            onClick={() => p.available && onEnterRalto()}
-            disabled={!p.available}
-            style={{ width: 220, textAlign: 'left', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.14)', borderRadius: 12, padding: '16px 18px', cursor: p.available ? 'pointer' : 'default', opacity: p.available ? 1 : 0.45 }}
-          >
-            <SuiteMark color={p.color} />
-            <div style={{ fontFamily: 'var(--font)', fontWeight: 700, fontSize: 14, color: '#fff', marginTop: 10, letterSpacing: 0.3 }}>{p.name}</div>
-            <div style={{ fontFamily: 'var(--font)', fontSize: 12, color: 'rgba(255,255,255,0.55)', marginTop: 3 }}>{p.available ? p.tagline : 'Not in this workspace'}</div>
-          </button>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
 // Root app — the only thing that owns navigation state
 // ---------------------------------------------------------------------------
 
 export function RaltoDesktopApp() {
   const [active, setActive] = useState<NavKey>('today')
-  const [inSuite, setInSuite] = useState(false)
   const [selectedJobId, setSelectedJobId] = useState<string | undefined>(undefined)
   const [selectedPlannerJobId, setSelectedPlannerJobId] = useState<string | undefined>(undefined)
   const [plannerTargetReqId, setPlannerTargetReqId] = useState<string | undefined>(undefined)
@@ -3905,45 +3849,39 @@ export function RaltoDesktopApp() {
       `}</style>
 
       <div style={{ width: 1240, height: 800, background: 'var(--surface)', borderRadius: 16, border: '1px solid var(--line)', boxShadow: '0 30px 60px rgba(23,21,31,0.20)', overflow: 'hidden', display: 'flex' }}>
-        {inSuite ? (
-          <SuiteContent onEnterRalto={() => setInSuite(false)} />
-        ) : (
-          <>
-            <Sidebar active={active} onSelect={setActive} onOpenSuite={() => setInSuite(true)} />
-            {active === 'today' && <TodayContent summaries={summaries} clients={clients} alerts={alerts} reloadAlerts={reloadAlerts} />}
-            {active === 'calendar' && <CalendarContent summaries={summaries} clients={clients} onOpenJob={openJobFromCalendar} onConvertEvent={convertEventToJob} />}
-            {active === 'team' && <ResourceCalendarContent people={people} onOpenJob={openJobFromCalendar} onConvertEvent={convertEventToJob} />}
-            {active === 'jobs' && (
-              <JobsContent
-                summaries={summaries}
-                clients={clients}
-                venues={venues}
-                venuesList={venuesList}
-                projects={projectsList}
-                roles={rolesList}
-                selectedId={selectedJobId}
-                onSelect={setSelectedJobId}
-                reloadSummaries={reloadSummaries}
-                prefill={jobPrefill}
-                onConsumedPrefill={() => setJobPrefill(undefined)}
-                onOpenRoleInPlanner={openRoleInPlanner}
-              />
-            )}
-            {active === 'planner' && (
-              <PlannerContent
-                summaries={summaries}
-                clients={clients}
-                selectedJobId={selectedPlannerJobId}
-                onSelectJob={setSelectedPlannerJobId}
-                reloadSummaries={reloadSummaries}
-                targetReqId={plannerTargetReqId}
-                onConsumedTarget={() => setPlannerTargetReqId(undefined)}
-              />
-            )}
-            {active === 'crew' && <CrewContent people={people} roles={rolesList} reloadPeople={reloadPeople} />}
-            {active === 'settings' && <SettingsContent roles={rolesList} reloadRoles={reloadRoles} />}
-          </>
+        <Sidebar active={active} onSelect={setActive} />
+        {active === 'today' && <TodayContent summaries={summaries} clients={clients} alerts={alerts} reloadAlerts={reloadAlerts} />}
+        {active === 'calendar' && <CalendarContent summaries={summaries} clients={clients} onOpenJob={openJobFromCalendar} onConvertEvent={convertEventToJob} />}
+        {active === 'team' && <ResourceCalendarContent people={people} onOpenJob={openJobFromCalendar} onConvertEvent={convertEventToJob} />}
+        {active === 'jobs' && (
+          <JobsContent
+            summaries={summaries}
+            clients={clients}
+            venues={venues}
+            venuesList={venuesList}
+            projects={projectsList}
+            roles={rolesList}
+            selectedId={selectedJobId}
+            onSelect={setSelectedJobId}
+            reloadSummaries={reloadSummaries}
+            prefill={jobPrefill}
+            onConsumedPrefill={() => setJobPrefill(undefined)}
+            onOpenRoleInPlanner={openRoleInPlanner}
+          />
         )}
+        {active === 'planner' && (
+          <PlannerContent
+            summaries={summaries}
+            clients={clients}
+            selectedJobId={selectedPlannerJobId}
+            onSelectJob={setSelectedPlannerJobId}
+            reloadSummaries={reloadSummaries}
+            targetReqId={plannerTargetReqId}
+            onConsumedTarget={() => setPlannerTargetReqId(undefined)}
+          />
+        )}
+        {active === 'crew' && <CrewContent people={people} roles={rolesList} reloadPeople={reloadPeople} />}
+        {active === 'settings' && <SettingsContent roles={rolesList} reloadRoles={reloadRoles} />}
       </div>
     </div>
   )
