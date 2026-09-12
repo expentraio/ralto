@@ -20,7 +20,7 @@ services:
       - key: SENDGRID_FROM_EMAIL
         value: no-reply@ralto.io
       - key: SENDGRID_FROM_NAME
-        value: Ralto
+        value: Crewing
       - key: ICAL_FEED_BASE_URL
         value: https://ralto-ical.onrender.com/feed
 
