@@ -412,13 +412,22 @@ function sameDay(a: Date, b: Date): boolean {
   return a.toDateString() === b.toDateString()
 }
 
-function getMonthWeeks(refDate: Date): Date[][] {
+// monthSpan defaults to 1 (existing single-month behaviour, untouched) —
+// the 2-month view passes 2 to get one continuous run of weeks covering
+// both months. Deliberately one continuous cursor walk rather than two
+// separate getMonthWeeks(refDate) / getMonthWeeks(nextMonth) calls: two
+// independent calls would each pad out to a full week at the seam,
+// duplicating that shared week (and its job bars, each with its own
+// independently-packed lane assignment) once as "next month" filler in
+// month 1's grid and again as "prev month" filler in month 2's — a single
+// walk across the full range produces that seam week exactly once.
+function getMonthWeeks(refDate: Date, monthSpan = 1): Date[][] {
   const year = refDate.getFullYear()
   const month = refDate.getMonth()
   const firstOfMonth = new Date(year, month, 1)
-  const lastOfMonth = new Date(year, month + 1, 0)
+  const lastOfRange = new Date(year, month + monthSpan, 0)
   const gridStart = startOfWeek(firstOfMonth)
-  const gridEnd = startOfWeek(lastOfMonth)
+  const gridEnd = startOfWeek(lastOfRange)
   const weeks: Date[][] = []
   let cursor = gridStart
   while (cursor <= gridEnd) {
@@ -526,7 +535,7 @@ function ProspectiveBandRow({ weekDates, events, onSelect }: { weekDates: Date[]
 
 function WeekRow({
   weekDates,
-  referenceMonth,
+  referenceMonths,
   tall,
   jobs,
   events,
@@ -534,7 +543,11 @@ function WeekRow({
   onSelectEvent,
 }: {
   weekDates: Date[]
-  referenceMonth: number
+  // Plural: the 2-month view has two "current" months, and any day
+  // belonging to either should render normally (not greyed) — only the
+  // genuine leading/trailing overflow into the month *before* or *after*
+  // the visible range is greyed, same convention as single-month view.
+  referenceMonths: number[]
   tall: boolean
   jobs: CalendarJob[]
   events: ProspectiveEvent[]
@@ -549,7 +562,7 @@ function WeekRow({
     <div style={{ borderBottom: '1px solid var(--line)' }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)' }}>
         {weekDates.map((date) => {
-          const inMonth = date.getMonth() === referenceMonth
+          const inMonth = referenceMonths.includes(date.getMonth())
           const isToday = sameDay(date, today)
           return (
             <div key={date.toISOString()} style={{ padding: '8px 10px 4px', fontFamily: 'var(--font)', fontSize: 12.5, fontWeight: isToday ? 700 : 500, color: isToday ? 'var(--primary)' : inMonth ? 'var(--ink)' : 'var(--ink-muted)', opacity: inMonth ? 1 : 0.5 }}>
@@ -711,6 +724,9 @@ function ProspectiveEventDetailCard({
   )
 }
 
+type CalendarMode = 'month' | 'week' | '2months'
+const CALENDAR_MODE_LABELS: Record<CalendarMode, string> = { month: 'Month', week: 'Week', '2months': '2 months' }
+
 function CalendarContent({
   summaries,
   clients,
@@ -722,7 +738,7 @@ function CalendarContent({
   onOpenJob: (id: string) => void
   onConvertEvent: (event: ProspectiveEvent) => void
 }) {
-  const [mode, setMode] = useState<'month' | 'week'>('month')
+  const [mode, setMode] = useState<CalendarMode>('month')
   const [refDate, setRefDate] = useState(new Date())
   const [addingEvent, setAddingEvent] = useState(false)
   const [selectedEventId, setSelectedEventId] = useState<string | undefined>(undefined)
@@ -745,20 +761,48 @@ function CalendarContent({
     [summaries, clients],
   )
 
-  const weeks = mode === 'month' ? getMonthWeeks(refDate) : [Array.from({ length: 7 }, (_, i) => addDays(startOfWeek(refDate), i))]
+  // '2months' walks getMonthWeeks as one continuous run (monthSpan: 2) —
+  // see that function's own comment for why this must not be two separate
+  // getMonthWeeks(refDate) calls (it would duplicate the seam week).
+  const weeks =
+    mode === 'month'
+      ? getMonthWeeks(refDate)
+      : mode === '2months'
+        ? getMonthWeeks(refDate, 2)
+        : [Array.from({ length: 7 }, (_, i) => addDays(startOfWeek(refDate), i))]
 
-  const goPrev = () => setRefDate((d) => (mode === 'month' ? new Date(d.getFullYear(), d.getMonth() - 1, 1) : addDays(d, -7)))
-  const goNext = () => setRefDate((d) => (mode === 'month' ? new Date(d.getFullYear(), d.getMonth() + 1, 1) : addDays(d, 7)))
+  // Both months in a 2-month view are "current" — only genuine overflow
+  // into the month before/after the visible range should grey out, same
+  // convention as single-month view's leading/trailing filler days.
+  const secondMonthRef = new Date(refDate.getFullYear(), refDate.getMonth() + 1, 1)
+  const referenceMonths = mode === '2months' ? [refDate.getMonth(), secondMonthRef.getMonth()] : [refDate.getMonth()]
+
+  const goPrev = () =>
+    setRefDate((d) => {
+      if (mode === 'month') return new Date(d.getFullYear(), d.getMonth() - 1, 1)
+      if (mode === '2months') return new Date(d.getFullYear(), d.getMonth() - 2, 1)
+      return addDays(d, -7)
+    })
+  const goNext = () =>
+    setRefDate((d) => {
+      if (mode === 'month') return new Date(d.getFullYear(), d.getMonth() + 1, 1)
+      if (mode === '2months') return new Date(d.getFullYear(), d.getMonth() + 2, 1)
+      return addDays(d, 7)
+    })
   const goToday = () => setRefDate(new Date())
 
   const headerLabel =
     mode === 'month'
       ? `${MONTH_LABELS[refDate.getMonth()]} ${refDate.getFullYear()}`
-      : (() => {
-          const s = startOfWeek(refDate)
-          const e = addDays(s, 6)
-          return `${s.getDate()} – ${e.getDate()} ${MONTH_LABELS[e.getMonth()]} ${e.getFullYear()}`
-        })()
+      : mode === '2months'
+        ? refDate.getFullYear() === secondMonthRef.getFullYear()
+          ? `${MONTH_LABELS[refDate.getMonth()]} – ${MONTH_LABELS[secondMonthRef.getMonth()]} ${refDate.getFullYear()}`
+          : `${MONTH_LABELS[refDate.getMonth()]} ${refDate.getFullYear()} – ${MONTH_LABELS[secondMonthRef.getMonth()]} ${secondMonthRef.getFullYear()}`
+        : (() => {
+            const s = startOfWeek(refDate)
+            const e = addDays(s, 6)
+            return `${s.getDate()} – ${e.getDate()} ${MONTH_LABELS[e.getMonth()]} ${e.getFullYear()}`
+          })()
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '24px 32px' }}>
@@ -772,13 +816,13 @@ function CalendarContent({
             <Plus size={13} /> Prospective event
           </button>
           <div style={{ display: 'flex', background: '#fff', border: '1px solid var(--line)', borderRadius: 10, padding: 3 }}>
-            {(['month', 'week'] as const).map((m) => (
+            {(['month', 'week', '2months'] as const).map((m) => (
               <button
                 key={m}
                 onClick={() => setMode(m)}
-                style={{ background: mode === m ? 'var(--primary-tint)' : 'none', color: mode === m ? 'var(--primary)' : 'var(--ink-muted)', border: 'none', borderRadius: 7, padding: '6px 14px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12.5, cursor: 'pointer', textTransform: 'capitalize' }}
+                style={{ background: mode === m ? 'var(--primary-tint)' : 'none', color: mode === m ? 'var(--primary)' : 'var(--ink-muted)', border: 'none', borderRadius: 7, padding: '6px 14px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12.5, cursor: 'pointer' }}
               >
-                {m}
+                {CALENDAR_MODE_LABELS[m]}
               </button>
             ))}
           </div>
@@ -820,16 +864,27 @@ function CalendarContent({
           ))}
         </div>
         {weeks.map((weekDates, i) => (
-          <WeekRow
-            key={i}
-            weekDates={weekDates}
-            referenceMonth={refDate.getMonth()}
-            tall={mode === 'week'}
-            jobs={calendarJobs}
-            events={openEvents}
-            onOpenJob={onOpenJob}
-            onSelectEvent={(event) => setSelectedEventId(event.id)}
-          />
+          <Fragment key={i}>
+            {/* One continuous week-grid, not two separate month blocks (see
+                getMonthWeeks's comment) — this divider is purely a visual
+                orientation cue marking where the second month starts,
+                rendered exactly once right before the week that contains
+                its 1st, never duplicating a week or its job bars. */}
+            {mode === '2months' && weekDates.some((d) => sameDay(d, secondMonthRef)) && (
+              <div style={{ padding: '6px 10px', fontFamily: 'var(--font)', fontWeight: 700, fontSize: 11.5, color: 'var(--ink)', background: 'var(--surface)', borderTop: '1px solid var(--line)', borderBottom: '1px solid var(--line)' }}>
+                {MONTH_LABELS[secondMonthRef.getMonth()]} {secondMonthRef.getFullYear()}
+              </div>
+            )}
+            <WeekRow
+              weekDates={weekDates}
+              referenceMonths={referenceMonths}
+              tall={mode === 'week'}
+              jobs={calendarJobs}
+              events={openEvents}
+              onOpenJob={onOpenJob}
+              onSelectEvent={(event) => setSelectedEventId(event.id)}
+            />
+          </Fragment>
         ))}
       </div>
 
@@ -936,9 +991,15 @@ const BOOKING_STATUS_ICON: Partial<Record<BookingStatus, { Icon: typeof CheckCir
   pencilled: { Icon: Pencil, color: 'var(--primary-soft)' },
 }
 
-function BookedPersonRow({ booking, onCancel }: { booking: Booking; onCancel: () => void }) {
+function BookedPersonRow({ booking, onConfirm, onCancel }: { booking: Booking; onConfirm: () => void; onCancel: () => void }) {
   const meta = BOOKING_STATUS_ICON[booking.status] ?? BOOKING_STATUS_ICON.offered!
   const Icon = meta.Icon
+  // Confirm is only a legal transition from pencilled/offered — same guard
+  // "Confirm everyone" already applies via pendingBookings, since the
+  // backend's ConfirmBooking has no status check of its own (unlike
+  // DeleteBooking) and would happily re-confirm and re-email an already-
+  // confirmed or declined booking if asked to.
+  const canConfirm = booking.status === 'pencilled' || booking.status === 'offered'
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '4px 0' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
@@ -947,13 +1008,24 @@ function BookedPersonRow({ booking, onCancel }: { booking: Booking; onCancel: ()
           {booking.first_name} {booking.last_name}
         </span>
       </div>
-      <button
-        onClick={onCancel}
-        title="Cancel this booking"
-        style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 2, color: 'var(--ink-muted)', flexShrink: 0, display: 'flex' }}
-      >
-        <X size={13} />
-      </button>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+        {canConfirm && (
+          <button
+            onClick={onConfirm}
+            title="Confirm this booking"
+            style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 2, color: 'var(--ink-muted)', display: 'flex' }}
+          >
+            <Check size={13} />
+          </button>
+        )}
+        <button
+          onClick={onCancel}
+          title="Cancel this booking"
+          style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 2, color: 'var(--ink-muted)', display: 'flex' }}
+        >
+          <X size={13} />
+        </button>
+      </div>
     </div>
   )
 }
@@ -969,11 +1041,13 @@ function JobRoleRow({
   req,
   bookings,
   onOpenInPlanner,
+  onConfirmBooking,
   onCancelBooking,
 }: {
   req: JobRequirementWithCounts
   bookings: Booking[]
   onOpenInPlanner: (req: JobRequirementWithCounts) => void
+  onConfirmBooking: (bookingId: string) => void
   onCancelBooking: (bookingId: string) => void
 }) {
   const roleComplete = req.quantity_confirmed >= req.quantity_required
@@ -999,7 +1073,7 @@ function JobRoleRow({
       {bookings.length > 0 && (
         <div style={{ borderTop: '1px solid var(--line)', paddingTop: 6, display: 'flex', flexDirection: 'column' }}>
           {bookings.map((b) => (
-            <BookedPersonRow key={b.id} booking={b} onCancel={() => onCancelBooking(b.id)} />
+            <BookedPersonRow key={b.id} booking={b} onConfirm={() => onConfirmBooking(b.id)} onCancel={() => onCancelBooking(b.id)} />
           ))}
         </div>
       )}
@@ -1451,6 +1525,11 @@ function JobsContent({
     reloadBookings(selected.requirements)
   }, [selected?.job.id, selected?.requirements, reloadBookings])
 
+  async function handleConfirmBooking(bookingId: string) {
+    await confirmBooking(bookingId)
+    reloadSummaries()
+  }
+
   async function handleCancelBooking(bookingId: string) {
     await cancelBooking(bookingId)
     reloadSummaries()
@@ -1498,7 +1577,6 @@ function JobsContent({
     )
   }
 
-  const u = urgencyFor(selected)
   const client = clients[selected.job.client_id]
   const venueName = selected.job.venue_id ? (venues[selected.job.venue_id] as { name: string } | undefined)?.name : undefined
   const primaryContact = contacts[0]
@@ -1533,7 +1611,12 @@ function JobsContent({
         <div style={{ fontFamily: 'var(--font)', fontSize: 13, color: 'var(--ink-muted)' }}>{client?.name ?? 'Unknown client'}</div>
         <div style={{ fontFamily: 'var(--font)', fontWeight: 700, fontSize: 24, color: 'var(--ink)', marginTop: 2 }}>{selected.job.name}</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10 }}>
-          <span style={{ fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12, padding: '4px 10px', borderRadius: 999, color: u.color, background: u.bg }}>{selected.job.status}</span>
+          {/* Job-level tag is the derived 3-value vocabulary only (Cancelled/
+              Pencil/Booked, see commitmentTag) — the raw Job.status lifecycle
+              enum (draft..complete) is a separate axis and must never render
+              here as a second, differently-coloured tag (it was leaking
+              "confirmed"/"crewing"/etc. verbatim via urgencyFor's tier color,
+              which is why testers saw "Confirmed" in several colours). */}
           <CommitmentBadge job={selected.job} />
           {pendingBookings.length > 0 && confirmEveryoneState === 'idle' && (
             <button
@@ -1583,6 +1666,7 @@ function JobsContent({
               req={r}
               bookings={bookingsByReq[r.id] ?? []}
               onOpenInPlanner={(req) => onOpenRoleInPlanner(req.job_id, req.id)}
+              onConfirmBooking={handleConfirmBooking}
               onCancelBooking={handleCancelBooking}
             />
           ))}
@@ -1949,13 +2033,24 @@ function getMonthDates(refDate: Date): Date[] {
   return Array.from({ length: daysInMonth }, (_, i) => new Date(year, month, i + 1))
 }
 
-type TeamMode = 'month' | 'week' | 'fortnight'
+type TeamMode = 'month' | 'week' | 'fortnight' | '2months'
+
+const TEAM_MODE_LABELS: Record<TeamMode, string> = { month: 'Month', week: 'Week', fortnight: 'Fortnight', '2months': '2 months' }
 
 // Week/Fortnight reuse the same startOfWeek/addDays helpers CalendarContent
 // already uses for its own month/week switcher — fortnight is just that
-// idea extended to 14 days instead of 7.
+// idea extended to 14 days instead of 7. 2months is two calendar months'
+// worth of getMonthDates back to back — the backend endpoint takes an
+// arbitrary start/end window already (confirmed against
+// GetResourceCalendar directly, no LIMIT or day-count assumption anywhere
+// in it), so this is purely a wider `dates` array; nothing else about the
+// grid needs to know it's looking at two months instead of one.
 function getTeamDates(mode: TeamMode, refDate: Date): Date[] {
   if (mode === 'month') return getMonthDates(refDate)
+  if (mode === '2months') {
+    const nextMonthRef = new Date(refDate.getFullYear(), refDate.getMonth() + 1, 1)
+    return [...getMonthDates(refDate), ...getMonthDates(nextMonthRef)]
+  }
   const start = startOfWeek(refDate)
   const days = mode === 'week' ? 7 : 14
   return Array.from({ length: days }, (_, i) => addDays(start, i))
@@ -1964,7 +2059,9 @@ function getTeamDates(mode: TeamMode, refDate: Date): Date[] {
 // Month's whole purpose is the wide overview — 30px columns, hover-only
 // detail is the correct trade-off there and stays untouched. Week/Fortnight
 // trade overview width for enough room to show a short job name or leave
-// reason inline, without truncating to nothing.
+// reason inline, without truncating to nothing. 2months is the same
+// overview trade-off as Month, just longer, so it shares Month's narrow
+// column width rather than Week/Fortnight's wide one.
 const DAY_COL_WIDTH = 30
 const WIDE_DAY_COL_WIDTH = 100
 const NAME_COL_WIDTH = 168
@@ -2023,7 +2120,7 @@ function ResourceCalendarCell({ row, date, mode, onOpenJob }: { row: ResourceCal
   // it stays in all three modes regardless of what's shown inline. Month
   // keeps zero inline text — its 30px columns are the wide-overview trade-off,
   // unchanged from today.
-  const showInline = mode !== 'month'
+  const showInline = mode === 'week' || mode === 'fortnight'
   const inlineText = !showInline ? undefined : booking ? booking.job_name : unavailable ? (unavailable.type ? AVAILABILITY_TYPE_LABEL[unavailable.type] : 'Unavailable') : undefined
   const inlineColor = booking ? '#fff' : 'var(--danger)'
 
@@ -2096,7 +2193,7 @@ function ResourceCalendarContent({
   const [search, setSearch] = useState('')
 
   const dates = useMemo(() => getTeamDates(mode, refDate), [mode, refDate])
-  const colWidth = mode === 'month' ? DAY_COL_WIDTH : WIDE_DAY_COL_WIDTH
+  const colWidth = mode === 'week' || mode === 'fortnight' ? WIDE_DAY_COL_WIDTH : DAY_COL_WIDTH
   const startDate = dateISO(dates[0])
   const endDate = dateISO(dates[dates.length - 1])
 
@@ -2105,10 +2202,12 @@ function ResourceCalendarContent({
 
   const goPrev = () => {
     if (mode === 'month') return setRefDate((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1))
+    if (mode === '2months') return setRefDate((d) => new Date(d.getFullYear(), d.getMonth() - 2, 1))
     setRefDate((d) => addDays(d, mode === 'week' ? -7 : -14))
   }
   const goNext = () => {
     if (mode === 'month') return setRefDate((d) => new Date(d.getFullYear(), d.getMonth() + 1, 1))
+    if (mode === '2months') return setRefDate((d) => new Date(d.getFullYear(), d.getMonth() + 2, 1))
     setRefDate((d) => addDays(d, mode === 'week' ? 7 : 14))
   }
   const goToday = () => setRefDate(new Date())
@@ -2116,11 +2215,18 @@ function ResourceCalendarContent({
   const headerLabel =
     mode === 'month'
       ? `${MONTH_LABELS[refDate.getMonth()]} ${refDate.getFullYear()}`
-      : (() => {
-          const s = dates[0]
-          const e = dates[dates.length - 1]
-          return `${s.getDate()} – ${e.getDate()} ${MONTH_LABELS[e.getMonth()]} ${e.getFullYear()}`
-        })()
+      : mode === '2months'
+        ? (() => {
+            const endRef = new Date(refDate.getFullYear(), refDate.getMonth() + 1, 1)
+            return refDate.getFullYear() === endRef.getFullYear()
+              ? `${MONTH_LABELS[refDate.getMonth()]} – ${MONTH_LABELS[endRef.getMonth()]} ${refDate.getFullYear()}`
+              : `${MONTH_LABELS[refDate.getMonth()]} ${refDate.getFullYear()} – ${MONTH_LABELS[endRef.getMonth()]} ${endRef.getFullYear()}`
+          })()
+        : (() => {
+            const s = dates[0]
+            const e = dates[dates.length - 1]
+            return `${s.getDate()} – ${e.getDate()} ${MONTH_LABELS[e.getMonth()]} ${e.getFullYear()}`
+          })()
 
   // Explicitly-added rows are session state only, never persisted — see
   // addendum v2 §1's "no pinning is persisted in v1."
@@ -2184,13 +2290,13 @@ function ResourceCalendarContent({
           Today
         </button>
         <div style={{ display: 'flex', background: '#fff', border: '1px solid var(--line)', borderRadius: 10, padding: 3, marginLeft: 4 }}>
-          {(['month', 'week', 'fortnight'] as const).map((m) => (
+          {(['month', 'week', 'fortnight', '2months'] as const).map((m) => (
             <button
               key={m}
               onClick={() => setMode(m)}
-              style={{ background: mode === m ? 'var(--primary-tint)' : 'none', color: mode === m ? 'var(--primary)' : 'var(--ink-muted)', border: 'none', borderRadius: 7, padding: '6px 14px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12.5, cursor: 'pointer', textTransform: 'capitalize' }}
+              style={{ background: mode === m ? 'var(--primary-tint)' : 'none', color: mode === m ? 'var(--primary)' : 'var(--ink-muted)', border: 'none', borderRadius: 7, padding: '6px 14px', fontFamily: 'var(--font)', fontWeight: 600, fontSize: 12.5, cursor: 'pointer' }}
             >
-              {m}
+              {TEAM_MODE_LABELS[m]}
             </button>
           ))}
         </div>
@@ -3613,9 +3719,8 @@ const SETTINGS_TABS: { key: SettingsTabKey; label: string }[] = [
   { key: 'skills', label: 'Skills' },
 ]
 
-function SettingsContent() {
+function SettingsContent({ roles, reloadRoles }: { roles: Role[]; reloadRoles: () => void }) {
   const [tab, setTab] = useState<SettingsTabKey>('roles')
-  const { data: roles, reload: reloadRoles } = useRoles()
   const { data: overtimeRules, reload: reloadOvertimeRules } = useOvertimeRules()
   const { data: skills, reload: reloadSkills } = useSkills()
 
@@ -3732,7 +3837,7 @@ export function RaltoDesktopApp() {
   const { data: clientsList } = useClients()
   const { data: venuesList } = useVenues()
   const { data: projectsList } = useProjects()
-  const { data: rolesList } = useRoles()
+  const { data: rolesList, reload: reloadRoles } = useRoles()
   const { data: people, reload: reloadPeople } = usePeople()
   const { data: alerts, reload: reloadAlerts } = useAlerts()
 
@@ -3836,7 +3941,7 @@ export function RaltoDesktopApp() {
               />
             )}
             {active === 'crew' && <CrewContent people={people} roles={rolesList} reloadPeople={reloadPeople} />}
-            {active === 'settings' && <SettingsContent />}
+            {active === 'settings' && <SettingsContent roles={rolesList} reloadRoles={reloadRoles} />}
           </>
         )}
       </div>

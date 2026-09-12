@@ -147,17 +147,52 @@ func (a *API) CreateBooking(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// responded_at is only set up-front for a Declined booking, via the CASE
-	// below — recorded as already answered (the phone call itself was the
-	// response), whereas a fresh pencil/offer has no response yet.
-	var b models.Booking
+	// A person can only ever be held against a requirement by one active
+	// (Pencilled or Offered) booking at a time. Re-pencilling, offering, or
+	// phone-declining someone who's already Pencilled/Offered for this same
+	// requirement must transition that existing row, not insert a second
+	// one — otherwise the crewing-completeness counts (and the progress
+	// bar) double-count the same person, exactly the "half hatched, half
+	// solid" bug this guards against. A prior Declined/Cancelled/Confirmed/
+	// etc. booking for the same pair is left alone and a fresh row is
+	// inserted below, since that's genuine history (previously asked and
+	// said no, or already worked it), not the same live hold being
+	// re-touched.
+	var existingID string
 	err := a.DB.QueryRow(r.Context(),
-		`INSERT INTO bookings (job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override, notes, offered_at, responded_at, organisation_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), CASE WHEN $3 = 'declined' THEN now() ELSE NULL END, $9)
-		 RETURNING id, job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override, offered_at, responded_at, confirmed_at, notes`,
-		reqID, req.PersonID, req.Status, req.StartDate, req.EndDate, req.CallTime, req.RateOverride, req.Notes, currentOrgID,
-	).Scan(&b.ID, &b.JobRequirementID, &b.PersonID, &b.Status, &b.StartDate, &b.EndDate, &b.CallTime,
-		&b.RateOverride, &b.OfferedAt, &b.RespondedAt, &b.ConfirmedAt, &b.Notes)
+		`SELECT id FROM bookings WHERE job_requirement_id = $1 AND person_id = $2 AND status IN ('pencilled', 'offered') AND organisation_id = $3`,
+		reqID, req.PersonID, currentOrgID,
+	).Scan(&existingID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, "failed to create booking")
+		return
+	}
+
+	var b models.Booking
+	statusCode := http.StatusCreated
+	if existingID != "" {
+		statusCode = http.StatusOK
+		err = a.DB.QueryRow(r.Context(),
+			`UPDATE bookings SET status = $1, start_date = $2, end_date = $3, call_time = $4, rate_override = $5, notes = $6,
+			        offered_at = CASE WHEN $1 = 'offered' THEN now() ELSE offered_at END,
+			        responded_at = CASE WHEN $1 = 'declined' THEN now() ELSE responded_at END
+			 WHERE id = $7
+			 RETURNING id, job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override, offered_at, responded_at, confirmed_at, notes`,
+			req.Status, req.StartDate, req.EndDate, req.CallTime, req.RateOverride, req.Notes, existingID,
+		).Scan(&b.ID, &b.JobRequirementID, &b.PersonID, &b.Status, &b.StartDate, &b.EndDate, &b.CallTime,
+			&b.RateOverride, &b.OfferedAt, &b.RespondedAt, &b.ConfirmedAt, &b.Notes)
+	} else {
+		// responded_at is only set up-front for a Declined booking, via the CASE
+		// below — recorded as already answered (the phone call itself was the
+		// response), whereas a fresh pencil/offer has no response yet.
+		err = a.DB.QueryRow(r.Context(),
+			`INSERT INTO bookings (job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override, notes, offered_at, responded_at, organisation_id)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), CASE WHEN $3 = 'declined' THEN now() ELSE NULL END, $9)
+			 RETURNING id, job_requirement_id, person_id, status, start_date, end_date, call_time, rate_override, offered_at, responded_at, confirmed_at, notes`,
+			reqID, req.PersonID, req.Status, req.StartDate, req.EndDate, req.CallTime, req.RateOverride, req.Notes, currentOrgID,
+		).Scan(&b.ID, &b.JobRequirementID, &b.PersonID, &b.Status, &b.StartDate, &b.EndDate, &b.CallTime,
+			&b.RateOverride, &b.OfferedAt, &b.RespondedAt, &b.ConfirmedAt, &b.Notes)
+	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to create booking")
 		return
@@ -172,7 +207,7 @@ func (a *API) CreateBooking(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusCreated, b)
+	writeJSON(w, statusCode, b)
 }
 
 // PromoteBookingToOffer is a scheduler turning a pencil into a formal ask —
