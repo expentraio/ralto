@@ -70,9 +70,13 @@ func (a *API) BridgeCoreSession(next http.Handler) http.Handler {
 	})
 }
 
+// "crewing" is Core's capability name for what this codebase still calls
+// Ralto — see Simplified_Suite_Product_Structure_v1_0.pdf §5: Ralto is kept
+// only as the internal test/demo project name, not the product name Core's
+// ProductAccess.product enum uses.
 func raltoRoleFor(person *middleware.CorePerson) (models.UserRole, bool) {
 	for _, pa := range person.ProductAccess {
-		if pa.Product != "ralto" {
+		if pa.Product != "crewing" {
 			continue
 		}
 		switch models.UserRole(pa.Role) {
